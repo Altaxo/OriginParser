@@ -1,0 +1,25 @@
+Content of the Origin file
+
+The content consist of one Worksheet 'Book1' named 'Ößberg', which is located in the folder 'Meßfolder'. Inside of 'Book1' is a sheet 'Äalesund'.
+The sheet contains five columns named 'A', 'B', 'C', 'D' and 'E' with 39 rows.
+The ValueType of column 'A' is Numeric, DeserializedDataType: Double, column with: 12, SpreadColumnType: X
+The ValueType of column 'B' is TextNumeric, column with: 14.5, SpreadColumnType: Z
+The ValueType of column 'C' is TextNumeric, column with: 9, SpreadColumnType: Y
+The ValueType of column 'D' is TextNumeric, column with: 18, SpreadColumnType: YErr
+The ValueType of column 'E' is Text, column with: 17, SpreadColumnType: Y
+
+There is only content in the first three rows:
+| Row | A | B   | C   | D    | E        |
+|  -  | - |   - |   - |    - |        - |
+|  0  | 1 | 1.5 | 1E3 | 1E-3 | Müller   |
+|  1  | 2 | 4.5 | 1E6 | 1E-6 | Meier    |
+|  2  | 3 | 7.5 | 1E9 | 1E-9 | Schultze |
+
+The Longname of the columns is '1 Langname 1' for column 'A', '2 Langname 2' for column 'B', '3 Langname 3' for column 'C', '4 Langname 4' for column 'D' and '5 Langname 5' for column 'E'.
+
+The Unit of the columns is empty, except for column 'E', where it is '✨Sparkle✨'.
+
+
+Changes with respect to 'OneBookOneSheetFiveColumns.opju':
+- Unit of column 'E' set to '✨Sparkle✨'.
+

@@ -1,0 +1,14 @@
+Content of the Origin file
+
+The content consist of one Worksheet 'Book1' named 'Ößberg', which is located in the folder 'Meßfolder'. Inside of 'Book1' is a sheet 'Äalesund'.
+The sheet contains one column named 'A', with 39 rows, ValueType: TextNumeric, column width: 6.7, SpreadColumnType: 'X'.
+
+
+Only the first 2 rows of column 'A' contain a value, which are:
+[0] 1.0
+[1] -1.0
+
+
+Changes with respect to file OneBookOneSheetOneColumn.opuj:
+- added value of 1.0 in row 0
+- added value of -1.0 in row 1

@@ -1,0 +1,7 @@
+Content of the Origin file
+
+The content consist of one Worksheet 'Book1' named 'Ößberg', inside of it is a sheet 'Äalesund'.
+The sheet contains three columns named 'A', 'B' and 'C', with 39 rows, type: Double(8), column width: 6.7. The SpreadColumnType of column 'A' is 'X', of column 'B' is 'Y', and of column 'C' is 'Y'. The ValueType for column 'A' is 'numeric', for column 'B' is 'numeric' and for column 'C' is 'numeric'.
+None of the rows of the sheet contains values.
+
+This is the reference file for all other files in this folder.

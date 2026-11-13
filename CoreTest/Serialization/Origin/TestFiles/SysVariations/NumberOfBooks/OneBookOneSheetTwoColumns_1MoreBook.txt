@@ -1,0 +1,30 @@
+Content of the Origin file
+
+The content consist of one Worksheet with Name='Biro' and Longname='Bauerfeind', which is located in the folder 'Überlingen'. Inside of 'Biro' is a sheet 'Änderung'.
+The sheet contains of 32 rows and two columns. Column 'A' is of ValueType 'TextNumeric'. Column 'B' is of ValueType='Numeric', ValueTypeSpecification='Double'.
+
+There is only content in the first seven rows:
+
+| Row | A | B | 
+|  -  | - | - |
+|  0  | 1 | 4 |
+|  1  | 2 | 5 |
+|  2  | 3 | 6 |
+|  3  | A | 4 |
+|  4  | B | 5 |
+|  5  | C | 6 |
+|  6  |   | 7 |
+
+The Comment of both columns in sheet 'Änderung' ist 'In sheet Änderung'. No Longname or Unit is set for the two columns.
+
+
+There is a second worksheet with Name='Strasse', Longname='Köln', which is located in the folder 'Überlingen'. Inside of 'Strasse' is a sheet 'Piñata'.
+The sheet consists of 32 rows and two columns. Column 'A' is of ValueType='Numeric', ValueTypeSpecification='Double', SpreadColumnType='Z'.  Column 'B' is of ValueType 'TextNumeric', SpreadColumnType='Y'.
+
+There is only content in the first 2 rows of sheet 'Piñata'
+
+| Row | A    | B    | 
+|  -  | -    | -    |
+|  0  | 345  | 623  |
+|  1  | 1324 | 5234 |
+The Comment of both columns in sheet 'Piñata' ist 'In sheet Piñata'. No Longname or Unit is set for the two columns.

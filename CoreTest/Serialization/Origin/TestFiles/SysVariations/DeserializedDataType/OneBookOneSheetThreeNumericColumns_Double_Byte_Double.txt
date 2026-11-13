@@ -1,0 +1,11 @@
+Content of the Origin file
+
+The content consist of one Worksheet 'Book1' named 'Ößberg', which is located in the folder 'Meßfolder'. Inside of 'Book1' is a sheet 'Äalesund'.
+The sheet contains three columns named 'A', 'B' and 'C' with 39 rows, ValueType: numeric, column width: 6.7, plotkind: 'Y'.
+None of the rows of the sheet contains values.
+
+The DeserializedDataType of columns 'A' and 'C' is 'Double.
+The DeserializedDataType of column 'B' is 'Byte'.
+
+Changes with respect to 'OneBookOneSheetThreeNumericColumns_Double_Double_Double.opju':
+- changed DeserializedDataType of column 'B' to 'Byte'

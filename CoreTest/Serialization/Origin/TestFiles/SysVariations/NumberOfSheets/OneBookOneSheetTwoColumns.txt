@@ -1,0 +1,18 @@
+Content of the Origin file
+
+The content consist of one Worksheet 'Book1' , which is located in the folder 'Überlingen'. Inside of 'Book1' is a sheet 'Änderung'.
+The sheet contains two columns named 'A', and 'B', type TextNumeric, with 32 rows.
+
+There is only content in the first six rows:
+| Row | A | B   | 
+|  -  | - |   - |
+|  0  | 1 | 4 |
+|  1  | 2 | 5 |
+|  2  | 3 | 6 |
+|  3  | A | D |
+|  4  | B | E |
+|  5  | C | F |
+
+The Comment of both columns in sheet 'Änderung' ist 'In sheet 1'. No Longname or Unit is set for the two columns.
+
+This is the reference .opju file for all other files in this folder.

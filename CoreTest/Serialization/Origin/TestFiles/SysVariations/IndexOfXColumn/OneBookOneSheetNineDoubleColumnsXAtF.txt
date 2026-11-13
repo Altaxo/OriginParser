@@ -1,0 +1,9 @@
+Content of the Origin file
+
+The content consist of one Worksheet 'Book1' named 'Ößberg', inside of it is a sheet 'Äalesund'.
+The sheet contains nine columns named 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H' and 'I', with 39 rows, format: numeric, type: Double(8), column width: 6.7. The SpreadColumnType of column 'F' is 'X', of all other columns the SpreadColumnType is 'Y'.
+None of the rows of the sheet contains values.
+
+Changes with respect to 'OneBookOneSheetOneDoubleColumnXAtA.opju':
+- column 'A' was set to SpreadColumnType 'Y' and column 'F' was set to SpreadColumnType 'X'
+

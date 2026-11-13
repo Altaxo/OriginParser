@@ -1,0 +1,9 @@
+Content of the Origin file
+
+The content consist of one Worksheet 'Book1' named 'Ößberg', inside of it is a sheet 'Äalesund'.
+The sheet contains three columns named 'A', 'B' and 'C', with 39 rows, format: numeric, type: Double(8), column width: 6.7. The SpreadColumnType of column 'A' is 'Ignore', of column 'B' is 'Y', and of column 'C' is 'Y'.
+None of the rows of the sheet contains values.
+
+Changes with respect to 'OneBookOneSheetOneDoubleColumn.opju':
+- changed SpreadColumnType of column 'A' to 'Ignore'
+

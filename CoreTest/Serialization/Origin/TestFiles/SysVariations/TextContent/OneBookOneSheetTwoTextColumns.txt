@@ -1,0 +1,7 @@
+Content of the Origin file
+
+The content consist of one Worksheet 'Book1' named 'Ößberg', which is located in the folder 'Meßfolder'. Inside of 'Book1' is a sheet 'Äalesund'.
+The sheet contains two columns named 'A', and 'B' with 39 rows, ValueType 'text', column widths: 16.5 and 31.5 . The SpreadColumnType of column 'A' is 'X' and of column 'B' is 'Y'.
+None of the rows of the sheet contains values.
+
+This is the reference file for all other files in this folder.

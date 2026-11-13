@@ -1,0 +1,23 @@
+Content of the Origin file
+
+The content consist of one Worksheet with Name='Biro' and Longname='Bauerfeind', which is located in the folder 'Überlingen'. Inside of 'Book1' is a sheet 'Änderung'.
+The sheet contains of 32 rows and two columns. Column 'A' is of ValueType 'TextNumeric'. Column 'B' is of ValueType='Numeric', ValueTypeSpecification='Double'.
+
+There is only content in the first seven rows:
+
+| Row | A | B | 
+|  -  | - | - |
+|  0  | 1 | 4 |
+|  1  | 2 | 5 |
+|  2  | 3 | 6 |
+|  3  | A | 4 |
+|  4  | B | 5 |
+|  5  | C | 6 |
+|  6  |   | 7 |
+
+The Comment of both columns in sheet 'Änderung' ist 'In sheet Änderung'. No Longname or Unit is set for the two columns.
+The column width of column 'A' is 33. The column width of column 'B' is 19.
+
+Changes with respect to the reference file 'OneBookOneSheetTwoColumns.opju':
+- changed column width of column 'A' to 33
+- changed column width of column 'B' to 19
