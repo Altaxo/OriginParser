@@ -34,14 +34,26 @@ namespace Altaxo.Serialization.Origin.SysVariations
             using var stream = File.OpenRead(path);
             var parser = new OriginOpjuParser(stream);
 
-            Assert.Single(parser.Books); // there is only one Book
-            Assert.Equal("Book1", parser.Books[0].Name); // named 'Book1'
-            Assert.Single(parser.Books[0].Sheets); // with one sheet inside
-            Assert.Single(parser.Books[0].Sheets[0].Columns); // with the expected number of columns
-            var column = parser.Books[0].Sheets[0].Columns[0];
+            Assert.Single(parser.Books);
+            var book = parser.Books[0];
+            Assert.Equal("Book1", book.Name);
+            Assert.Equal("Ößberg", book.LongName);
+            Assert.Equal("Meßfolder", book.FolderName);
+
+            Assert.Single(book.Sheets); // with one sheet inside
+            var sheet = book.Sheets[0];
+            Assert.Equal("Äalesund", sheet.Name);
+
+            Assert.Single(sheet.Columns); // with the expected number of columns
+            var column = sheet.Columns[0];
             Assert.Equal("A", column.Name); // the columns short names are expected to be A, B, C, D, E, F, G, H, I for the first 9 columns
             Assert.Equal(ValueType.Numeric, column.ValueType); // the expected column types are checked
             Assert.Equal(DeserializedDataType.Single, column.DeserializedDataType); // the expected column types are checked
+            Assert.Equal(SpreadColumnType.X, column.SpreadColumnType);
+            Assert.Equal(6.7, column.Width, 1E-6); // the columns width is expected to be 6.7 for all columns
+            Assert.Empty(column.LongName);
+            Assert.Empty(column.Unit);
+            Assert.Empty(column.Comment);
 
             Assert.NotNull(column.Values);
             Assert.True(column.Values.Count >= expectedContent.Length, $"Expected at least {expectedContent.Length} decoded rows, got {column.Values.Count}.");

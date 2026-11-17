@@ -11,29 +11,31 @@ namespace Altaxo.Serialization.Origin.SysVariations
         [InlineData("OneBookOneSheetTwoColumns_1MoreBook.opju", new string[] { "Überlingen", "Überlingen" }, new string[] { "Biro", "Strasse" }, new string[] { "Bauerfeind", "Köln" }, new string[] { "Änderung", "Piñata" })]
         [InlineData("OneBookOneSheetTwoColumns_2MoreBooks.opju", new string[] { "Überlingen", "Überlingen", "Überlingen\\Grüezi" }, new string[] { "Biro", "Strasse", "Kitcat" }, new string[] { "Bauerfeind", "Köln", "Español" }, new string[] { "Änderung", "Piñata", "🔥Firefly🔥" })]
         [InlineData("OneBookOneSheetTwoColumns_3MoreBooks.opju", new string[] { "Überlingen", "Überlingen", "Überlingen\\Grüezi", "" }, new string[] { "Biro", "Strasse", "Kitcat", "Cacao" }, new string[] { "Bauerfeind", "Köln", "Español", "✨Sparkle✨" }, new string[] { "Änderung", "Piñata", "🔥Firefly🔥", "Århus" })]
-        public void ExpectNumberOfBooks(string shortFileName, string[] folderNames, string[] bookNamesShort, string[] bookNamesLong, string[] sheetNames)
+        public void ExpectNumberOfBooks(string shortFileName, string[] expectedFolderNames, string[] expectedBookNamesShort, string[] expectedBookNamesLong, string[] expectedSheetNames)
         {
             var path = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Serialization", "Origin", "TestFiles", "SysVariations", "NumberOfBooks", shortFileName);
             using var stream = File.OpenRead(path);
             var parser = new OriginOpjuParser(stream);
 
-            Assert.Equal(folderNames.Length, bookNamesShort.Length); // we expect the expected number of books
-            Assert.Equal(folderNames.Length, bookNamesLong.Length); // we expect the expected number of books
-            Assert.Equal(folderNames.Length, sheetNames.Length); // we expect the expected number of books
-            Assert.Equal(bookNamesShort.Length, parser.Books.Count); // we expect the expected number of books
+            Assert.Equal(expectedFolderNames.Length, expectedBookNamesShort.Length); // we expect the expected number of books
+            Assert.Equal(expectedFolderNames.Length, expectedBookNamesLong.Length); // we expect the expected number of books
+            Assert.Equal(expectedFolderNames.Length, expectedSheetNames.Length); // we expect the expected number of books
 
+
+            Assert.Equal(expectedBookNamesShort.Length, parser.Books.Count); // we expect the expected number of books
+            OriginOpjuParser.Book book;
             for (int iBook = 0; iBook < parser.Books.Count; iBook++)
             {
-                var book = parser.Books[iBook];
-                Assert.Equal(bookNamesShort[iBook], book.Name); // check the name of the book
-                Assert.Equal(bookNamesLong[iBook], book.LongName); // check the long name of the book
-                Assert.Equal(folderNames[iBook], book.FolderName); // check the folder name of the book
+                book = parser.Books[iBook];
+                Assert.Equal(expectedBookNamesShort[iBook], book.Name); // check the name of the book
+                Assert.Equal(expectedBookNamesLong[iBook], book.LongName); // check the long name of the book
+                Assert.Equal(expectedFolderNames[iBook], book.FolderName); // check the folder name of the book
 
                 var sheets = book.Sheets;
                 Assert.Single(sheets); // we expect only one sheet in each book
                 var sheet = sheets[0];
-                Assert.Equal(sheetNames[iBook], sheet.Name); // check the name of the sheet
-
+                Assert.Equal(expectedSheetNames[iBook], sheet.Name); // check the name of the sheet
+                Assert.NotNull(sheet.Columns); // we expect the columns to be not null
                 Assert.Equal(2, sheet.Columns.Count); // we expect 2 columns in each sheet
                 var columnA = sheet.Columns[0];
                 var columnB = sheet.Columns[1];
@@ -41,8 +43,124 @@ namespace Altaxo.Serialization.Origin.SysVariations
                 Assert.Equal("A", columnA.Name);
                 Assert.Equal("B", columnB.Name);
 
-                Assert.Equal($"In sheet {sheetNames[iBook]}", columnA.Comment);
-                Assert.Equal($"In sheet {sheetNames[iBook]}", columnB.Comment);
+                Assert.Empty(columnA.LongName);
+                Assert.Empty(columnB.LongName);
+                Assert.Empty(columnA.Unit);
+                Assert.Empty(columnB.Unit);
+                Assert.Equal($"In sheet {expectedSheetNames[iBook]}", columnA.Comment);
+                Assert.Equal($"In sheet {expectedSheetNames[iBook]}", columnB.Comment);
+
+                switch (iBook)
+                {
+                    case 0:
+                        {
+                            Assert.Equal(ValueType.TextNumeric, columnA.ValueType);
+                            Assert.Equal(SpreadColumnType.X, columnA.SpreadColumnType);
+                            Assert.Equal(31, columnA.Width);
+
+                            Assert.NotNull(columnA.Values);
+                            Assert.True(columnA.Values.Count >= 6);
+                            Assert.Equal(1.0, columnA.Values[0]);
+                            Assert.Equal(2.0, columnA.Values[1]);
+                            Assert.Equal(3.0, columnA.Values[2]);
+                            Assert.Equal("A", columnA.Values[3]);
+                            Assert.Equal("B", columnA.Values[4]);
+                            Assert.Equal("C", columnA.Values[5]);
+                            for (int i = 6; i < columnA.Values.Count; i++) { Assert.True(columnA.Values[i].IsCellEmpty, $"Cell A[{i}] contains {columnA.Values[i]}"); }
+
+                            Assert.Equal(ValueType.Numeric, columnB.ValueType);
+                            Assert.Equal(DeserializedDataType.Double, columnB.DeserializedDataType);
+                            Assert.Equal(SpreadColumnType.Y, columnB.SpreadColumnType);
+                            Assert.Equal(17, columnB.Width);
+
+                            Assert.NotNull(columnB.Values);
+                            Assert.True(columnB.Values.Count >= 7);
+                            Assert.Equal(4.0, columnB.Values[0]);
+                            Assert.Equal(5.0, columnB.Values[1]);
+                            Assert.Equal(6.0, columnB.Values[2]);
+                            Assert.Equal(4.0, columnB.Values[3]);
+                            Assert.Equal(5.0, columnB.Values[4]);
+                            Assert.Equal(6.0, columnB.Values[5]);
+                            Assert.Equal(7.0, columnB.Values[6]);
+                            for (int i = 7; i < columnB.Values.Count; i++) { Assert.True(columnB.Values[i].IsCellEmpty, $"Cell B[{i}] contains {columnB.Values[i]}"); }
+                        }
+                        break;
+                    case 1:
+                        {
+                            Assert.Equal(ValueType.Numeric, columnA.ValueType);
+                            Assert.Equal(DeserializedDataType.Double, columnA.DeserializedDataType);
+                            Assert.Equal(SpreadColumnType.Z, columnA.SpreadColumnType);
+                            Assert.Equal(6.7, columnA.Width, 1e-6);
+
+                            Assert.NotNull(columnA.Values);
+                            Assert.True(columnA.Values.Count >= 2);
+                            Assert.Equal(345.0, columnA.Values[0]);
+                            Assert.Equal(1324.0, columnA.Values[1]);
+                            for (int i = 2; i < columnA.Values.Count; i++) { Assert.True(columnA.Values[i].IsCellEmpty, $"Cell A[{i}] contains {columnA.Values[i]}"); }
+
+                            Assert.Equal(ValueType.TextNumeric, columnB.ValueType);
+                            Assert.Equal(SpreadColumnType.Y, columnB.SpreadColumnType);
+                            Assert.Equal(6.7, columnB.Width, 1e-6);
+
+                            Assert.NotNull(columnB.Values);
+                            Assert.True(columnB.Values.Count >= 2);
+                            Assert.Equal(623.0, columnB.Values[0]);
+                            Assert.Equal(5234.0, columnB.Values[1]);
+                            for (int i = 2; i < columnB.Values.Count; i++) { Assert.True(columnB.Values[i].IsCellEmpty, $"Cell B[{i}] contains {columnB.Values[i]}"); }
+
+                        }
+                        break;
+                    case 2:
+                        {
+                            Assert.Equal(ValueType.TextNumeric, columnA.ValueType);
+                            Assert.Equal(SpreadColumnType.X, columnA.SpreadColumnType);
+                            Assert.Equal(6.7, columnA.Width, 1e-6);
+
+                            Assert.NotNull(columnA.Values);
+                            Assert.True(columnA.Values.Count >= 3);
+                            Assert.Equal("Ä", columnA.Values[0]);
+                            Assert.Equal("Ö", columnA.Values[1]);
+                            Assert.Equal("Ü", columnA.Values[2]);
+                            for (int i = 3; i < columnA.Values.Count; i++) { Assert.True(columnA.Values[i].IsCellEmpty, $"Cell A[{i}] contains {columnA.Values[i]}"); }
+
+                            Assert.Equal(ValueType.TextNumeric, columnB.ValueType);
+                            Assert.Equal(SpreadColumnType.Y, columnB.SpreadColumnType);
+                            Assert.Equal(6.7, columnB.Width, 1e-6);
+
+                            Assert.NotNull(columnB.Values);
+                            Assert.True(columnB.Values.Count >= 3);
+                            Assert.Equal(9.0, columnB.Values[0]);
+                            Assert.Equal(8.0, columnB.Values[1]);
+                            Assert.Equal(7.0, columnB.Values[2]);
+                            for (int i = 3; i < columnB.Values.Count; i++) { Assert.True(columnB.Values[i].IsCellEmpty, $"Cell B[{i}] contains {columnB.Values[i]}"); }
+
+                        }
+                        break;
+                    case 3:
+                        {
+                            Assert.Equal(ValueType.TextNumeric, columnA.ValueType);
+                            Assert.Equal(SpreadColumnType.X, columnA.SpreadColumnType);
+                            Assert.Equal(6.7, columnA.Width, 1e-6);
+
+                            Assert.NotNull(columnA.Values);
+                            Assert.True(columnA.Values.Count >= 2);
+                            Assert.Equal(1111.0, columnA.Values[0]);
+                            Assert.Equal(3333.0, columnA.Values[1]);
+                            for (int i = 2; i < columnA.Values.Count; i++) { Assert.True(columnA.Values[i].IsCellEmpty, $"Cell A[{i}] contains {columnA.Values[i]}"); }
+
+                            Assert.Equal(ValueType.TextNumeric, columnB.ValueType);
+                            Assert.Equal(SpreadColumnType.Y, columnB.SpreadColumnType);
+                            Assert.Equal(6.7, columnB.Width, 1e-6);
+
+                            Assert.NotNull(columnB.Values);
+                            Assert.True(columnB.Values.Count >= 2);
+                            Assert.Equal(2222.0, columnB.Values[0]);
+                            Assert.Equal(4444.0, columnB.Values[1]);
+                            for (int i = 2; i < columnB.Values.Count; i++) { Assert.True(columnB.Values[i].IsCellEmpty, $"Cell B[{i}] contains {columnB.Values[i]}"); }
+
+                        }
+                        break;
+                }
             }
         }
     }

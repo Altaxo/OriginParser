@@ -24,14 +24,22 @@ namespace Altaxo.Serialization.Origin.SysVariations
             using var stream = File.OpenRead(path);
             var parser = new OriginOpjuParser(stream);
 
-            Assert.Single(parser.Books); // there is only one Book
-            Assert.Equal("Book1", parser.Books[0].Name); // named 'Book1'
-            Assert.Single(parser.Books[0].Sheets); // with one sheet inside
-            Assert.Equal(3, parser.Books[0].Sheets[0].Columns.Count); // with the expected number of columns
+            Assert.Single(parser.Books);
+            var book = parser.Books[0];
+            Assert.Equal("Book1", book.Name);
+            Assert.Equal("Ößberg", book.LongName);
+            Assert.Equal("Meßfolder", book.FolderName);
+
+            Assert.Single(book.Sheets); // with one sheet inside
+            var sheet = book.Sheets[0];
+            Assert.Equal("Äalesund", sheet.Name);
+
+            Assert.NotNull(sheet.Columns); // with the expected number of columns
+            Assert.Equal(3, sheet.Columns.Count);
 
             for (int i = 0; i < 3; i++)
             {
-                var column = parser.Books[0].Sheets[0].Columns[i];
+                var column = sheet.Columns[i];
                 Assert.Equal("" + (char)('A' + i), column.Name); // the columns short names are expected to be A, B, C, D, E, F, G, H, I for the first 9 columns
                 var expectedColumnType = i switch
                 {
@@ -40,8 +48,24 @@ namespace Altaxo.Serialization.Origin.SysVariations
                     2 => expectedColumnType3,
                     _ => throw new InvalidOperationException("Unexpected column index")
                 };
-
                 Assert.Equal(expectedColumnType, column.ValueType); // the expected column types are checked
+                if (expectedColumnType == ValueType.Numeric)
+                {
+                    Assert.Equal(DeserializedDataType.Double, column.DeserializedDataType); // the expected column types are checked
+                }
+                Assert.Equal(i == 0 ? SpreadColumnType.X : SpreadColumnType.Y, column.SpreadColumnType); // the expected column types are checked
+                Assert.Equal(6.7, column.Width, 1E-6); // the columns width is expected to be 6.7 for all columns
+                Assert.Empty(column.LongName);
+                Assert.Empty(column.Unit);
+                Assert.Empty(column.Comment);
+
+                if (column.Values is not null)
+                {
+                    for (int j = 0; j < column.Values.Count; j++)
+                    {
+                        Assert.True(column.Values[j].IsCellEmpty);
+                    }
+                }
             }
         }
     }

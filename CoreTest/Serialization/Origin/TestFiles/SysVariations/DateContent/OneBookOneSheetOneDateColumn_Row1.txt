@@ -1,0 +1,16 @@
+Content of the Origin file
+
+The content consist of one Worksheet with Name='M', LongName='Ößberg', which is located in the folder 'Krüger'. Inside the worksheet is a sheet 'Übergang'.
+The sheet contains one column named 'A' with 39 rows, ValueType 'date', ValueTypeSpecification='Date_DDMMYYYY_HH_MM_SS', column width=23.5. 
+The SpreadColumnType of column 'A' is 'Y', the LongName of column 'A' is 'DateColumn', the unit of column 'A' is 'Köln' and the comment of column 'A' is 'Äppel'.
+
+Column A contains the following values:
+
+| Row | A                   |
+| -   | -                   |
+| 0   |                     | 
+| 1   | 16.11.2026 23:12:34 |
+
+
+Changes with respect to the reference file OneBookOneSheetOneDateColumn.opju:
+- added value of '16.11.2026 23:12:34' to row 1

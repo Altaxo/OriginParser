@@ -24,17 +24,30 @@ namespace Altaxo.Serialization.Origin.SysVariations
             using var stream = File.OpenRead(path);
             var parser = new OriginOpjuParser(stream);
 
-            Assert.Single(parser.Books); // there is only one Book
-            Assert.Equal("Book1", parser.Books[0].Name); // named 'Book1'
-            Assert.Single(parser.Books[0].Sheets); // with one sheet inside
-            Assert.Equal(2, parser.Books[0].Sheets[0].Columns.Count); // with the expected number of columns
+            Assert.Single(parser.Books);
+            var book = parser.Books[0];
+            Assert.Equal("Book1", book.Name);
+            Assert.Equal("Ößberg", book.LongName);
+            Assert.Equal("Meßfolder", book.FolderName);
+
+            Assert.Single(book.Sheets); // with one sheet inside
+            var sheet = book.Sheets[0];
+            Assert.Equal("Äalesund", sheet.Name);
+
+            Assert.NotNull(sheet.Columns); // with the expected number of columns
+            Assert.Equal(2, sheet.Columns.Count);
 
             for (int iColumn = 0; iColumn < 2; iColumn++)
             {
-                var column = parser.Books[0].Sheets[0].Columns[iColumn];
+                var column = sheet.Columns[iColumn];
                 Assert.Equal("" + (char)('A' + iColumn), column.Name); // the columns short names are expected to be A, B, C, D, E, F, G, H, I for the first 9 columns
                 Assert.Equal(ValueType.Text, column.ValueType); // the expected column types are checked
+                Assert.Equal(iColumn == 0 ? SpreadColumnType.X : SpreadColumnType.Y, column.SpreadColumnType); // the expected column types are checked
 
+                Assert.Equal(iColumn == 0 ? 16.5 : 31.5, column.Width, 1E-6); // the columns width is expected to be 6.7 for all columns
+                Assert.Empty(column.LongName);
+                Assert.Empty(column.Unit);
+                Assert.Empty(column.Comment);
 
                 Assert.NotNull(column.Values);
                 Assert.True(column.Values.Count >= 30);

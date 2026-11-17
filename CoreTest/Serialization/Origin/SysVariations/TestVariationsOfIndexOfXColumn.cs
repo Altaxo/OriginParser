@@ -4,7 +4,7 @@ using Xunit;
 
 namespace Altaxo.Serialization.Origin.SysVariations
 {
-    public class IndexOfXColumn
+    public class TestVariationsOfIndexOfXColumn
     {
         [Theory]
         [InlineData("OneBookOneSheetNineDoubleColumnsXAtA.opju", 0)]
@@ -24,14 +24,31 @@ namespace Altaxo.Serialization.Origin.SysVariations
             var parser = new OriginOpjuParser(stream);
 
             Assert.Single(parser.Books); // there is only one Book
-            Assert.Equal("Book1", parser.Books[0].Name); // named 'Book1'
-            Assert.Single(parser.Books[0].Sheets); // with one sheet inside
-            Assert.Equal(9, parser.Books[0].Sheets[0].Columns.Count); // with the expected number of columns
+            var book = parser.Books[0];
+            Assert.Equal("Book1", book.Name); // named 'Book1'
+            Assert.Equal("Ößberg", book.LongName);
+            Assert.Equal("Meßfolder", book.FolderName);
+
+            Assert.Single(book.Sheets); // with one sheet inside
+            var sheet = book.Sheets[0];
+            Assert.Equal("Äalesund", sheet.Name);
+            Assert.Equal(9, sheet.Columns.Count); // with the expected number of columns
 
             for (int i = 0; i < 9; i++)
             {
-                var column = parser.Books[0].Sheets[0].Columns[i];
+                var column = sheet.Columns[i];
                 Assert.Equal("" + (char)('A' + i), column.Name); // the columns short names are expected to be A, B, C, D, E, F, G, H, I for the first 9 columns
+                Assert.Equal(ValueType.Numeric, column.ValueType);
+                Assert.Equal(DeserializedDataType.Double, column.DeserializedDataType);
+                Assert.Equal(6.7, column.Width, 1E-6); // the columns width is expected to be 6.7 for all columns
+                Assert.Empty(column.LongName);
+                Assert.Empty(column.Unit);
+                Assert.Empty(column.Comment);
+                Assert.True(column.Values.Count <= 39); // maximum number of rows in the test files is 39, so the number of values in each column should be less than or equal to 39
+                for (int j = 0; j < column.Values.Count; j++)
+                {
+                    Assert.True(column.Values[j].IsCellEmpty);
+                }
                 Assert.Equal(i == expectedIndexOfXColumn ? SpreadColumnType.X : SpreadColumnType.Y, column.SpreadColumnType); // the expected column is the X column, all others are ignored
             }
         }

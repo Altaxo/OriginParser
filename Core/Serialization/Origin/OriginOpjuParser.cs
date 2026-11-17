@@ -39,9 +39,20 @@ namespace Altaxo.Serialization.Origin
     /// The object model and cell data are only partially decoded. Candidate records may occur by chance
     /// inside binary data. See the format research at <see href="https://github.com/exbound/opj"/>,
     /// the engineering specs at <see href="https://github.com/exbound/opj/blob/main/docs/engineering-spec.md"/>
+    /// <para>
+    /// The parser works in two stages. <see cref="ParseIntoRecords"/> turns the file into a flat list of
+    /// candidate <see cref="IRecord"/> entries (see <see cref="Records"/>). The constructor then runs a
+    /// sequence of interpretation passes over that list, each of which recovers one property of the
+    /// worksheet object model (dataset headers, column designations, long names, units, comments, sheet
+    /// names, widths, book metadata). Every pass is self validating: when its expectations are not met it
+    /// leaves the affected objects unresolved instead of guessing, so unresolved ownership and raw encoded
+    /// data stay separated from the decoded values.
+    /// </para>
     /// </remarks>
     public class OriginOpjuParser
     {
+        // ----- Record types: the raw, partially reassembled view of the file body -----
+
         /// <summary>
         /// Interface for the record type used in .opju files.
         /// </summary>
@@ -72,6 +83,7 @@ namespace Altaxo.Serialization.Origin
         [System.Diagnostics.DebuggerDisplay("{DebuggerDisplay,nq}")]
         public record TLVRecord(int Offset, byte Tag, ReadOnlyMemory<byte> Payload) : IRecord
         {
+            /// <summary>Gets a one-line view of the tag, length and first payload bytes for the debugger.</summary>
             private string DebuggerDisplay => $"TLV Offs={Offset:X}, Tag={Tag:X2}, L={Payload.Length:X2}, C={Text ?? BitConverter.ToString(Payload.Span[..Math.Min(Payload.Length, 16)].ToArray()).Replace('-', ' ')}";
 
             /// <summary>Gets the payload as ASCII text when every byte is printable; otherwise, null.</summary>
@@ -112,6 +124,7 @@ namespace Altaxo.Serialization.Origin
         [System.Diagnostics.DebuggerDisplay("{DebuggerDisplay,nq}")]
         public record UnknownRegionRecord(int Offset, int Length, ReadOnlyMemory<byte> Payload) : IRecord
         {
+            /// <summary>Gets a one-line view of the length and first payload bytes for the debugger.</summary>
             private string DebuggerDisplay => $"UNK Offs={Offset:X}, L={Length:X}, C={BitConverter.ToString(Payload.Span[..Math.Min(Payload.Length, 8)].ToArray()).Replace('-', ' ')}";
 
             /// <inheritdoc/>
@@ -140,9 +153,13 @@ namespace Altaxo.Serialization.Origin
         /// <summary>
         /// Represents the preview image table record, which contains the offsets and lengths of the embedded PNG images in the OPJU file.
         /// </summary>
+        /// <param name="Offset">The byte offset of the table in the file.</param>
+        /// <param name="Length">The length of the table in bytes, including its 16 byte prefix.</param>
+        /// <param name="Payload">The table bytes.</param>
         [System.Diagnostics.DebuggerDisplay("{DebuggerDisplay,nq}")]
         public record ImageTable(int Offset, int Length, ReadOnlyMemory<byte> Payload) : UnknownRegionRecord(Offset, Length, Payload)
         {
+            /// <summary>Gets a one-line view of the length and first payload bytes for the debugger.</summary>
             private string DebuggerDisplay => $"ITA Offs={Offset:X}, L={Length:X}, C={BitConverter.ToString(Payload.Span[..Math.Min(Payload.Length, 8)].ToArray()).Replace('-', ' ')}";
 
             /// <summary>
@@ -161,6 +178,7 @@ namespace Altaxo.Serialization.Origin
         [System.Diagnostics.DebuggerDisplay("{DebuggerDisplay,nq}")]
         public record PngRecord(int Offset, ReadOnlyMemory<byte> Payload) : IRecord
         {
+            /// <summary>Gets a one-line view of the image offset and length for the debugger.</summary>
             private string DebuggerDisplay => $"PNG Offs={Offset:X}, L={Payload.Length:X}";
             /// <inheritdoc/>
             public int NextOffset => Offset + Payload.Length;
@@ -180,46 +198,87 @@ namespace Altaxo.Serialization.Origin
         /// <param name="Name">The decoded sheet name.</param>
         public sealed record SheetNameCandidate(int Offset, string Name);
 
+        /// <summary>A worksheet book (workbook) assembled from the dataset names of its columns.</summary>
+        /// <param name="Name">The book name, which is the part before the last underscore of a dataset name.</param>
+        /// <param name="Label">The book label. Not recovered yet, therefore always <see langword="null"/>.</param>
+        /// <param name="Sheets">The sheets of the book, addressable by their one-based sheet number.</param>
         public record Book(string? Name, string? Label, IReadOnlyList<Sheet> Sheets)
         {
+            /// <summary>Gets or sets the project tree path of the folder the book is stored in; empty when unresolved.</summary>
             public string FolderName { get; set; } = string.Empty;
+            /// <summary>Gets or sets the long name of the book; empty when it was not recovered.</summary>
             public string LongName { get; set; } = string.Empty;
         }
 
+        /// <summary>A worksheet sheet, identified by the sheet number encoded in the dataset names.</summary>
+        /// <param name="Number">The one-based sheet number within the book.</param>
+        /// <param name="RowCount">The number of rows. Not recovered yet, therefore always <see langword="null"/>.</param>
+        /// <param name="Columns">The columns of the sheet in file order.</param>
         public record Sheet(int Number, int? RowCount, IReadOnlyList<AbstractColumn> Columns)
         {
+            /// <summary>Gets or sets the sheet name; empty when it was not recovered.</summary>
             public string Name { get; set; } = string.Empty;
         }
 
+        /// <summary>
+        /// Base class of a worksheet dataset (column) recovered from the project stream.
+        /// </summary>
         public abstract class AbstractColumn
         {
+            /// <summary>Initializes a new instance of the <see cref="AbstractColumn"/> class.</summary>
+            /// <param name="datasetName">The dataset name as stored in the file.</param>
+            /// <param name="descriptorRecords">The records that make up the dataset header.</param>
             protected AbstractColumn(string datasetName, IReadOnlyList<IRecord> descriptorRecords)
             {
                 DatasetName = datasetName;
                 DescriptorRecords = descriptorRecords;
             }
 
+            /// <summary>Gets the raw dataset name, e.g. <c>Book1_A</c> for sheet 1 or <c>Book1_A@2</c> for sheet 2.</summary>
             public string DatasetName { get; }
+            /// <summary>Gets or sets the column name part of the dataset name; <see langword="null"/> while the book and sheet could not be resolved.</summary>
             public string? Name { get; set; }
+            /// <summary>Gets the records that form the dataset header, from the first recognized header record up to the value block envelope.</summary>
             public IReadOnlyList<IRecord> DescriptorRecords { get; }
             // Null means the values have not been decoded, not that the column is empty.
+            /// <summary>Gets the decoded cell values, or <see langword="null"/> when the value block was not decoded.</summary>
             public IReadOnlyList<Variant>? Values { get; init; }
 
+            /// <summary>Gets or sets the role of the column in a plot; <see cref="SpreadColumnType.Ignore"/> when unresolved.</summary>
             public SpreadColumnType SpreadColumnType { get; set; } = SpreadColumnType.Ignore;
 
+            /// <summary>Gets or sets the declared value type of the column; <see langword="null"/> when unresolved.</summary>
             public ValueType? ValueType { get; set; }
 
+            /// <summary>Gets or sets the data type the value block was decoded as; <see langword="null"/> when the block was not decoded.</summary>
             public DeserializedDataType? DeserializedDataType { get; set; }
-            public string Longname { get; set; } = string.Empty;
+            /// <summary>Gets or sets the long name of the column; empty when not recovered.</summary>
+            public string LongName { get; set; } = string.Empty;
+            /// <summary>Gets or sets the unit of the column; empty when not recovered or not present.</summary>
             public string Unit { get; set; } = string.Empty;
+            /// <summary>Gets or sets the comment of the column; empty when not recovered or not present.</summary>
             public string Comment { get; set; } = string.Empty;
+            /// <summary>Gets or sets the display width in column units; 0 when not recovered.</summary>
             public double Width { get; set; }
+            /// <summary>Gets or sets the format of the column values; <see cref="ValueTypeSpecification.Numeric_Decimal"/> when unresolved.</summary>
+            public ValueTypeSpecification ValueTypeSpecification { get; set; }
+
+            /// <summary>Gets or sets the records that carry the column designation and value type; <see langword="null"/> when not recovered.</summary>
             internal IReadOnlyList<IRecord>? TypeDescriptorRecords { get; set; }
 
         }
 
+        /// <summary>A worksheet dataset whose value block is introduced by a 24 byte envelope record.</summary>
         public sealed class DatasetColumn : AbstractColumn
         {
+            /// <summary>Initializes a new instance of the <see cref="DatasetColumn"/> class.</summary>
+            /// <param name="datasetName">The dataset name as stored in the file.</param>
+            /// <param name="elementWidth">The element width byte of the width record that introduced the dataset.</param>
+            /// <param name="descriptorRecords">The records that make up the dataset header.</param>
+            /// <param name="dataStartRecord">The record in which the value block starts.</param>
+            /// <param name="dataOffset">The byte offset of the value block within the file.</param>
+            /// <param name="candidateDataLength">The element count announced by the envelope, when the envelope carries one.</param>
+            /// <param name="candidateData">The bytes the scanner could provide for the value block.</param>
             public DatasetColumn(string datasetName, byte elementWidth, IReadOnlyList<IRecord> descriptorRecords,
                 IRecord dataStartRecord, int dataOffset, ulong? candidateDataLength, ReadOnlyMemory<byte>? candidateData)
                 : base(datasetName, descriptorRecords)
@@ -231,19 +290,30 @@ namespace Altaxo.Serialization.Origin
                 CandidateData = candidateData;
             }
 
+            /// <summary>Gets the element width byte: 1, 2, 4, 8, 16, 50 or 10 (text/numeric) select the value block layout.</summary>
             internal byte ElementWidth { get; }
+            /// <summary>Gets the record in which the value block starts.</summary>
             internal IRecord DataStartRecord { get; }
+            /// <summary>Gets the file offset of the value block, i.e. the offset just behind the envelope's two byte block prefix.</summary>
             internal int DataOffset { get; }
+            /// <summary>Gets the element count announced by the envelope, or <see langword="null"/> when the envelope does not carry one.</summary>
             internal ulong? CandidateDataLength { get; }
             // The length and bytes are hypotheses; neither establishes a native block boundary.
+            /// <summary>Gets the bytes the scanner made available for the value block, or <see langword="null"/> when they were not available.</summary>
             internal ReadOnlyMemory<byte>? CandidateData { get; }
+            /// <summary>Gets the number of rows the value block was decoded to, or <see langword="null"/> when it was not decoded.</summary>
             internal int? DataRowCount { get; init; }
 
         }
 
 
+        /// <summary>A matrix dataset together with the dimensions inferred from the surrounding records.</summary>
+        /// <param name="Name">The dataset name of the matrix.</param>
+        /// <param name="NumberOfRows">The inferred row count, or <see langword="null"/> when it could not be inferred.</param>
+        /// <param name="NumberOfColumns">The inferred column count, or <see langword="null"/> when it could not be inferred.</param>
         private sealed record MatrixCandidate(string Name, int? NumberOfRows, int? NumberOfColumns);
 
+        /// <summary>The matrix dimensions inferred by <see cref="FindMatrixDatasetCandidates"/>; kept for later use.</summary>
         private IReadOnlyList<MatrixCandidate> _matrixCandidates = [];
 
         /// <summary>Gets the format version from the file header.</summary>
@@ -258,7 +328,9 @@ namespace Altaxo.Serialization.Origin
         /// <summary>Gets the seven-byte root header.</summary>
         public ReadOnlyMemory<byte> RootHeader { get; private set; }
 
+        /// <summary>The records built up by <see cref="ParseIntoRecords"/> in ascending offset order.</summary>
         private List<IRecord> _records = new List<IRecord>();
+        /// <summary>The complete project bytes, used where raw byte access is needed instead of the record view.</summary>
         private byte[] _fileData = [];
 
         /// <summary>Gets candidate records recovered by scanning and resynchronizing the body.</summary>
@@ -270,12 +342,19 @@ namespace Altaxo.Serialization.Origin
         /// <remarks>The sheet type and parent book cannot be established from these matches alone.</remarks>
         public IReadOnlyList<SheetNameCandidate> SheetNameCandidates { get; }
 
+        /// <summary>Gets the books resolved from the worksheet dataset names, in the order the datasets occur in the file.</summary>
         public IReadOnlyList<Book> Books { get; }
 
+        /// <summary>Gets the datasets whose names do not follow the Book_Column@Sheet pattern and therefore have no resolved owner.</summary>
         internal IReadOnlyList<AbstractColumn> UnassociatedColumns { get; }
 
         /// <summary>Reads an OPJU project from the beginning of a stream without closing it.</summary>
         /// <param name="originFile">A readable, seekable stream containing the project.</param>
+        /// <remarks>
+        /// The passes below run in a fixed order: the dataset headers are located first, because the later passes
+        /// match designations, long names and widths positionally against the datasets found in file order. A pass
+        /// that cannot prove this correspondence leaves the property unresolved instead of guessing.
+        /// </remarks>
         /// <exception cref="ArgumentException">The stream is not readable or seekable.</exception>
         /// <exception cref="InvalidDataException">The header is invalid or incomplete.</exception>
         public OriginOpjuParser(Stream originFile)
@@ -299,6 +378,17 @@ namespace Altaxo.Serialization.Origin
             ApplyWorksheetBookMetadata();
         }
 
+        // ----- Interpretation passes: worksheet books, sheets and their columns -----
+
+        /// <summary>
+        /// Applies the long name of every book that is shown in exactly one window.
+        /// </summary>
+        /// <remarks>
+        /// The long name of a book is stored behind a fixed marker inside the description of its window. The searched
+        /// area ends at the next window candidate or at the first indexed preview image. A book is only given a long
+        /// name when its name occurs exactly once among the books and among the windows, and when the area contains
+        /// exactly one decodable long name.
+        /// </remarks>
         private void ApplyWorksheetBookMetadata()
         {
             var windows = FindWindowCandidates();
@@ -308,6 +398,7 @@ namespace Altaxo.Serialization.Origin
                 Book? book = null;
                 int bookCount = 0;
                 int windowCount = 0;
+                // A book can be attributed to a window only if its name occurs exactly once as a book and once as a window.
                 foreach (var candidate in Books)
                     if (candidate.Name == windows[w].Name)
                     {
@@ -330,6 +421,7 @@ namespace Altaxo.Serialization.Origin
                     }
                 string? longName = null;
                 bool ambiguous = false;
+                // Behind the marker follows a length byte, the name bytes, a NUL byte and a 0x0a terminator.
                 for (int p = start; p <= end - longNameMarker.Length - 1; ++p)
                 {
                     if (!_fileData.AsSpan(p, longNameMarker.Length).SequenceEqual(longNameMarker))
@@ -360,6 +452,15 @@ namespace Altaxo.Serialization.Origin
             ApplyWorksheetFolders(windows);
         }
 
+        /// <summary>
+        /// Applies the folder path of the project tree to the books listed in it.
+        /// </summary>
+        /// <remarks>
+        /// The project tree refers to the book windows by their ordinal within <paramref name="windows"/>. The tree is
+        /// accepted only when it parses without leftovers and assigns every window exactly once; the path is then still
+        /// applied to a book only if that book and its window are uniquely named.
+        /// </remarks>
+        /// <param name="windows">The window candidates in file order.</param>
         private void ApplyWorksheetFolders(List<(int Index, string Name)> windows)
         {
             // The project-tree block follows the final indexed preview and has a bounded native length.
@@ -416,6 +517,17 @@ namespace Altaxo.Serialization.Origin
             }
         }
 
+        /// <summary>
+        /// Reads one folder entry of the project tree and maps the files it lists to the folder path.
+        /// </summary>
+        /// <param name="position">On input the offset of the folder entry, on output the offset directly behind it.</param>
+        /// <param name="end">The exclusive end of the project tree block.</param>
+        /// <param name="parent">The path of the parent folder.</param>
+        /// <param name="root"><see langword="true"/> for the invisible root entry, whose own name is not part of the path.</param>
+        /// <param name="depth">Current recursion depth, limited so that a corrupted block cannot recurse endlessly.</param>
+        /// <param name="assignments">Receives the file ordinal to folder path mapping; a duplicate ordinal rejects the block.</param>
+        /// <param name="windowCount">The number of window candidates, which bounds the number of files of a folder.</param>
+        /// <returns><see langword="true"/> if the folder entry was read completely; otherwise, <see langword="false"/>.</returns>
         private bool TryReadFolder(ref int position, int end, string parent, bool root, int depth,
             Dictionary<int, string> assignments, int windowCount)
         {
@@ -473,6 +585,7 @@ namespace Altaxo.Serialization.Origin
                 return false;
             for (int i = 0; i < fileCount; ++i)
             {
+                // Two entry forms occur: a five byte form without an ordinal and a seven byte form whose fifth byte is the window ordinal.
                 int ordinal;
                 if (end - position >= 5 && _fileData.AsSpan(position, 5).SequenceEqual(new byte[] { 0x80, 0x01, 0x85, 0, 0 }))
                 {
@@ -495,12 +608,20 @@ namespace Altaxo.Serialization.Origin
             int folderCount = _fileData[position++] / 2;
             if (folderCount > end - position)
                 return false;
+            // The sub folders follow and extend the path of their parent.
             for (int i = 0; i < folderCount; ++i)
                 if (!TryReadFolder(ref position, end, path, false, depth + 1, assignments, windowCount))
                     return false;
             return true;
         }
 
+        /// <summary>
+        /// Applies the sheet names found in the window area of a book to the sheets of that book.
+        /// </summary>
+        /// <remarks>
+        /// The names are applied only when their count, their one-based numbers and their column counts match the
+        /// sheets of the book exactly. A book with an ambiguous or missing window candidate keeps its sheet names empty.
+        /// </remarks>
         private void ApplyWorksheetSheetNames()
         {
             var windows = FindWindowCandidates();
@@ -538,6 +659,15 @@ namespace Altaxo.Serialization.Origin
             }
         }
 
+        /// <summary>
+        /// Applies the display widths of the columns of a book, taken from the width records in its window area.
+        /// </summary>
+        /// <remarks>
+        /// Widths are stored little-endian in tenths of a column unit in a <c>0x8d</c> record. Because the short
+        /// layout is ambiguous in workbooks that use the format code <c>0x20</c>, two candidate lists are collected
+        /// and the one whose length matches the number of columns of the book wins. If neither matches, no width is
+        /// applied at all rather than assigning widths to the wrong columns.
+        /// </remarks>
         private void ApplyWorksheetColumnWidths()
         {
             var windows = FindWindowCandidates();
@@ -569,15 +699,61 @@ namespace Altaxo.Serialization.Origin
                 if (columns.Count == 0)
                     continue;
 
+                // The short width layout is introduced by a single byte format record. Most workbooks use
+                // the format code 0x60 there, some use 0x20. Where 0x20 is used the long layout is not
+                // present, so the two variants are collected separately and the one that adds up to the
+                // number of columns wins.
                 var widths = new List<double>();
-                for (int i = windows[windowIndex].Index + 1; i + 2 < end; ++i)
+                var widthsWithShortFormat20 = new List<double>();
+                for (int i = windows[windowIndex].Index + 1; i + 1 < end; ++i)
                 {
-                    if (Records[i] is not TLVRecord count || count.Tag != 0x89 ||
-                        count.Payload.Length != 1 || count.Payload.Span[0] != 1 ||
-                        Records[i + 1] is not TLVRecord marker || marker.Tag != 0x82 || marker.Payload.Length != 1 ||
+                    if (Records[i] is TLVRecord shortPrefix && shortPrefix.Tag == 0x8f &&
+                        shortPrefix.Payload.Length == 1 &&
+                        (shortPrefix.Payload.Span[0] == 0x60 || shortPrefix.Payload.Span[0] == 0x20) &&
+                        Records[i + 1] is TLVRecord shortWidth && shortWidth.Tag == 0x8d &&
+                        shortWidth.Payload.Length is 1 or 2 && shortPrefix.NextOffset == shortWidth.Offset &&
+                        shortWidth.NextOffset <= Records[end - 1].NextOffset - 6 &&
+                        _fileData.AsSpan(shortWidth.NextOffset, 6).SequenceEqual(new byte[] { 0xbf, 0xbf, 0xbf, 0xbf, 0xbf, 0xbf })
+                    )
+                    {
+                        ushort shortEncodedWidth = shortWidth.Payload.Length == 1
+                            ? shortWidth.Payload.Span[0]
+                            : BinaryPrimitives.ReadUInt16LittleEndian(shortWidth.Payload.Span);
+                        if (shortEncodedWidth > 0)
+                        {
+                            if (shortPrefix.Payload.Span[0] == 0x60)
+                            {
+                                widths.Add(shortEncodedWidth / 10.0);
+                                ++i;
+                            }
+                            widthsWithShortFormat20.Add(shortEncodedWidth / 10.0);
+                        }
+                        if (shortPrefix.Payload.Span[0] == 0x60)
+                            continue;
+                    }
+
+                    if (i + 2 >= end || Records[i] is not TLVRecord prefix ||
+                        Records[i + 1] is not TLVRecord marker || marker.Payload.Length != 1 ||
                         Records[i + 2] is not TLVRecord width || width.Tag != 0x8d ||
                         width.Payload.Length is < 1 or > 2 ||
-                        count.NextOffset != marker.Offset || marker.NextOffset != width.Offset)
+                        prefix.NextOffset != marker.Offset || marker.NextOffset != width.Offset)
+                        continue;
+
+                    bool standardLayout = prefix.Tag == 0x89 && prefix.Payload.Span.SequenceEqual(new byte[] { 0x01 }) &&
+                        marker.Tag == 0x82;
+                    // In empty numeric columns the scanner can combine the count with the preceding descriptor.
+                    bool combinedLayout = marker.Tag == 0x8f &&
+                        ((prefix.Tag == 0x8f && prefix.Payload.Span.SequenceEqual(new byte[] { 0x01, 0x60 }) &&
+                          marker.Payload.Span[0] != 0x60) ||
+                         (prefix.Tag == 0x8d && prefix.Payload.Length == 4 && prefix.Payload.Span[0] is >= 1 and <= 9 &&
+                          marker.Payload.Span[0] != 0x60 &&
+                          (prefix.Payload.Span[1..].SequenceEqual(new byte[] { 0x00, 0x01, 0x60 }) ||
+                           prefix.Payload.Span[1..].SequenceEqual(new byte[] { 0x00, 0x00, 0x60 }))) ||
+                         (prefix.Tag == 0x83 && prefix.Payload.Span.SequenceEqual(new byte[] { 0x21, 0x61 }) &&
+                          marker.Payload.Span.SequenceEqual(new byte[] { 0x20 }))) &&
+                        width.NextOffset <= Records[end - 1].NextOffset - 6 &&
+                        _fileData.AsSpan(width.NextOffset, 6).SequenceEqual(new byte[] { 0xbf, 0xbf, 0xbf, 0xbf, 0xbf, 0xbf });
+                    if (!standardLayout && !combinedLayout)
                         continue;
 
                     // Observed display widths are stored as little-endian tenths of a column unit.
@@ -589,12 +765,22 @@ namespace Altaxo.Serialization.Origin
                 }
 
                 if (widths.Count != columns.Count)
-                    continue;
+                {
+                    if (widthsWithShortFormat20.Count != columns.Count)
+                        continue;
+                    widths = widthsWithShortFormat20;
+                }
                 for (int i = 0; i < columns.Count; ++i)
                     columns[i].Width = widths[i];
             }
         }
 
+        /// <summary>
+        /// Groups the located datasets into books and sheets according to their dataset names.
+        /// </summary>
+        /// <param name="columns">The located datasets in file order.</param>
+        /// <returns>The books in order of first occurrence, and the datasets whose names carry no resolvable owner.</returns>
+        /// <remarks>The grouping is derived from the dataset names alone; it is not confirmed by the file structure.</remarks>
         private static (IReadOnlyList<Book> Books, IReadOnlyList<AbstractColumn> UnassociatedColumns) GroupWorksheetDatasets(
             IReadOnlyList<AbstractColumn> columns)
         {
@@ -639,6 +825,14 @@ namespace Altaxo.Serialization.Origin
             return (books.AsReadOnly(), unassociated.AsReadOnly());
         }
 
+        /// <summary>
+        /// Splits a worksheet dataset name into its book, column and sheet number parts.
+        /// </summary>
+        /// <param name="datasetName">The dataset name, e.g. <c>Book1_A</c> for sheet 1 or <c>Book1_A@2</c> for sheet 2.</param>
+        /// <param name="bookName">The part in front of the last underscore, which is the assumed book name.</param>
+        /// <param name="columnName">The part between the last underscore and the <c>@</c> suffix, which is the assumed column name.</param>
+        /// <param name="sheetNumber">The one-based sheet number; 1 when the name has no <c>@</c> suffix.</param>
+        /// <returns><see langword="true"/> if the name follows the observed naming pattern.</returns>
         private static bool TryParseWorksheetDatasetName(string datasetName, [NotNullWhen(true)] out string? bookName,
             [NotNullWhen(true)] out string? columnName, out int sheetNumber)
         {
@@ -665,10 +859,20 @@ namespace Altaxo.Serialization.Origin
             return true;
         }
 
+        /// <summary>
+        /// Read-only list of the sheets resolved for a book, addressed by position but stored by one-based sheet number.
+        /// </summary>
+        /// <param name="count">The highest sheet number seen for the book, which fixes the number of positions.</param>
+        /// <param name="sheets">The resolved sheets keyed by their one-based sheet number.</param>
+        /// <remarks>A position without a resolved sheet yields an empty placeholder sheet, keeping the positions of the higher numbered sheets intact.</remarks>
         private sealed class NumberedSheets(int count, IReadOnlyDictionary<int, Sheet> sheets) : IReadOnlyList<Sheet>
         {
+            /// <summary>Gets the number of sheet positions of the book.</summary>
             public int Count => count;
 
+            /// <summary>Gets the sheet at the given zero-based position, or an empty sheet if that position was not resolved.</summary>
+            /// <param name="index">The zero-based position within the book.</param>
+            /// <exception cref="ArgumentOutOfRangeException"><paramref name="index"/> is outside the sheet positions of the book.</exception>
             public Sheet this[int index]
             {
                 get
@@ -679,20 +883,36 @@ namespace Altaxo.Serialization.Origin
                 }
             }
 
+            /// <summary>Enumerates the sheet positions of the book in ascending order.</summary>
+            /// <returns>The sheets of the book, one per position.</returns>
             public IEnumerator<Sheet> GetEnumerator()
             {
                 for (int i = 0; i < count; ++i)
                     yield return this[i];
             }
 
+            /// <inheritdoc/>
             System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
         }
 
+        // ----- Worksheet datasets: locating the dataset headers and decoding their value blocks -----
+
+        /// <summary>
+        /// Locates the worksheet datasets by their dataset header and decodes their value blocks where the layout is known.
+        /// </summary>
+        /// <returns>The located datasets in file order.</returns>
+        /// <remarks>
+        /// A dataset is recognized by the width record announcing its element width, the dataset name record, the short
+        /// descriptor and the 24 byte envelope in front of the value block, and by the two byte block prefix behind the
+        /// envelope. Everything accepted here is a candidate: the envelope announces a length hypothesis, it does not
+        /// establish a native block boundary.
+        /// </remarks>
         private IReadOnlyList<AbstractColumn> FindWorksheetDatasetCandidates()
         {
             var columns = new List<AbstractColumn>();
             for (int i = 0; i + 4 < Records.Count; ++i)
             {
+                // A dataset starts with the width record that announces the element width of its value block.
                 if (Records[i] is not TLVRecord width || width.Tag != 0x85 ||
                     !(width.Payload.Length == 1 && width.Payload.Span[0] is 1 or 2 or 4 or 8 or 10 or 16 or 50 ||
                       width.Payload.Length == 2 && width.Payload.Span[0] is 0x08 or 0x0a && width.Payload.Span[1] is 0x14 or 0x16 ||
@@ -717,14 +937,7 @@ namespace Altaxo.Serialization.Origin
                       nameRecord.Tag == 0x97 || width.Payload.Length == 3 && nameRecord.Tag == 0x95 ||
                       extendedTextNumericWidth && nameRecord.Tag == 0x96) ||
                     Records[nameIndex + 1] is not TLVRecord descriptor ||
-                    !((descriptor.Tag == 0x8f &&
-                       (descriptor.Payload.Span.StartsWith(new byte[] { 0xc8, 0x10 }) ||
-                        descriptor.Payload.Span.StartsWith(new byte[] { 0xca, 0x10 }) ||
-                        descriptor.Payload.Span.StartsWith(new byte[] { 0xe8, 0x10 }))) ||
-                      (descriptor.Tag == 0x8d && descriptor.Payload.Span.StartsWith(new byte[] { 0xca, 0x10 })) ||
-                      (descriptor.Tag is 0x8e or 0x90 && descriptor.Payload.Length == 4 &&
-                       (descriptor.Payload.Span.StartsWith(new byte[] { 0xc8, 0x10 }) ||
-                        descriptor.Payload.Span.StartsWith(new byte[] { 0xca, 0x10 })))))
+                    !IsWorksheetDatasetDescriptor(descriptor))
                     continue;
                 int envelopeIndex = nameIndex + 2;
                 if (Records[envelopeIndex] is TLVRecord extra && extra.Tag == 0x8d &&
@@ -762,6 +975,7 @@ namespace Altaxo.Serialization.Origin
                 if (hasControlCharacter)
                     continue;
 
+                // The value block follows the envelope directly and starts with 0x0a 0x05, or with 0x0a 0x04 for text/numeric columns.
                 int dataRecordIndex = envelopeIndex + 1;
                 if (!TryCopyRecordBytes(dataRecordIndex, envelope.NextOffset, 2, out var prefix) ||
                     prefix[0] != 0x0a || (prefix[1] != 0x05 && !(textNumericWidth && prefix[1] == 0x04)))
@@ -771,13 +985,17 @@ namespace Altaxo.Serialization.Origin
                 int textNumericHeaderIndex = i - 3;
                 if (textNumericHeaderIndex >= 0 && Records[textNumericHeaderIndex] is TLVRecord rowCandidate && rowCandidate.Tag == 0x84)
                     --textNumericHeaderIndex;
-                bool textNumeric = textNumericWidth && textNumericHeaderIndex >= 0 &&
+                bool textNumericHeader = textNumericHeaderIndex >= 0 &&
                     Records[textNumericHeaderIndex] is TLVRecord mixedHeader && mixedHeader.Tag is 0x81 or 0x86 &&
                     mixedHeader.Payload.Length == 4 &&
                     (mixedHeader.Payload.Span[0] == 0x21 && mixedHeader.Payload.Span[1] is 0x51 or 0x60 or 0x61 ||
                      mixedHeader.Payload.Span[0] == 0x20 && mixedHeader.Payload.Span[1] == 0x61) &&
                     mixedHeader.Payload.Span[2] == 0x03;
-                ulong? candidateLength = width.Payload.Length == 1 && width.Payload.Span[0] == 8 || textNumeric
+                // The descriptor remains identifiable when the scanner swallowed the preceding type header.
+                bool textNumeric = textNumericWidth && (textNumericHeader ||
+                    descriptor.Payload.Span.StartsWith(new byte[] { 0xca, 0x10 }));
+                // Only 8 byte elements and text/numeric columns announce the element count as a little-endian 64 bit value in the envelope.
+                ulong? candidateLength = width.Payload.Span[0] == 8 || textNumeric
                     ? BinaryPrimitives.ReadUInt64LittleEndian(envelope.Payload.Span.Slice(8, 8))
                     : null;
                 ReadOnlyMemory<byte>? candidateData = null;
@@ -792,6 +1010,7 @@ namespace Altaxo.Serialization.Origin
                     descriptorRecords.Add(Records[j]);
                 int? dataRowCount = null;
                 IReadOnlyList<Variant>? values = null;
+                // The decoder to use is selected by the element width, the declared data type and the block layout markers.
                 if (textNumeric && candidateData is { } mixedData &&
                     TryDecodeTextNumericDataset(mixedData.Span, dataRecordIndex, dataOffset, out var mixedValues))
                 {
@@ -852,19 +1071,28 @@ namespace Altaxo.Serialization.Origin
             return columns.AsReadOnly();
         }
 
+        /// <summary>
+        /// Applies the long name, unit and comment of every column, taken from the long name fields in file order.
+        /// </summary>
+        /// <param name="columns">The located datasets in file order.</param>
+        /// <remarks>
+        /// The long name field carries the three texts separated by CRLF. The fields are matched to the datasets purely
+        /// by their order of occurrence, so the assignment is skipped entirely when the number of fields does not equal
+        /// the number of datasets.
+        /// </remarks>
         private void ApplyWorksheetColumnLongnames(IReadOnlyList<AbstractColumn> columns)
         {
             var longnames = new List<string>();
             var units = new List<string>();
             var comments = new List<string>();
+            // Local function: reads the long name field starting at the given offset and appends its three parts.
+            // Returning false means the field is malformed and the whole pass has to be abandoned.
             bool TryAddLongnameAt(int recordIndex, int offset)
             {
-                if (!TryCopyRecordBytes(recordIndex, offset, 4, out var signature))
+                if (!TryCopyRecordBytes(recordIndex, offset, 2, out var signature) || signature[0] != 0x9a)
                     return true;
                 int prefixLength;
-                if (signature.AsSpan().SequenceEqual(new byte[] { 0x9a, 0x01, 0x00, 0x0a }))
-                    prefixLength = 4;
-                else if (signature[0] == 0x9a && signature[1] == 0 && offset >= 3)
+                if (signature[1] == 0 && offset >= 3)
                 {
                     int prefixIndex = recordIndex;
                     while (prefixIndex > 0 && Records[prefixIndex].Offset > offset - 3)
@@ -873,6 +1101,16 @@ namespace Altaxo.Serialization.Origin
                         !context.AsSpan().SequenceEqual(new byte[] { 0x84, 0x01, 0x08 }))
                         return true;
                     prefixLength = 2;
+                }
+                else if (signature[1] > 0)
+                {
+                    // Behind the tag comes the length of the metadata block, which is empty for the default formats and
+                    // carries additional entries such as the format string of a user defined value type specification.
+                    // The long name itself follows the 0x0a separator behind that block.
+                    if (!TryCopyRecordBytes(recordIndex, offset, 3 + signature[1], out var metadata) ||
+                        metadata[2 + signature[1]] != 0x0a)
+                        return true;
+                    prefixLength = 3 + signature[1];
                 }
                 else
                     return true;
@@ -888,7 +1126,7 @@ namespace Altaxo.Serialization.Origin
 
                 int encodedLength = prefixLength + 3 + header[prefixLength];
                 if (!TryCopyRecordBytes(recordIndex, offset, encodedLength, out var encoded) ||
-                    !TryReadWorksheetColumnLongname(encoded, 0, out var fieldText, out _))
+                    !TryReadWorksheetColumnLongname(encoded, 0, prefixLength, out var fieldText))
                     return false;
                 int unitSeparator = fieldText.IndexOf("\r\n", StringComparison.Ordinal);
                 int commentSeparator = unitSeparator < 0 ? -1 : fieldText.IndexOf("\r\n", unitSeparator + 2, StringComparison.Ordinal);
@@ -900,6 +1138,7 @@ namespace Altaxo.Serialization.Origin
 
             for (int recordIndex = 0; recordIndex < Records.Count; ++recordIndex)
             {
+                // The long name field is searched for by its tag byte, which can also sit inside a record payload.
                 switch (Records[recordIndex])
                 {
                     case UnknownRegionRecord region:
@@ -922,24 +1161,28 @@ namespace Altaxo.Serialization.Origin
                 return;
             for (int i = 0; i < columns.Count; ++i)
             {
-                columns[i].Longname = longnames[i];
+                columns[i].LongName = longnames[i];
                 columns[i].Unit = units[i];
                 columns[i].Comment = comments[i];
             }
         }
 
-        private static bool TryReadWorksheetColumnLongname(ReadOnlySpan<byte> data, int offset, out string longname, out int encodedLength)
+        /// <summary>
+        /// Reads a column long name field located at the given offset of a byte buffer.
+        /// </summary>
+        /// <param name="data">The buffer containing the field.</param>
+        /// <param name="offset">The offset of the field, which starts with the tag byte 0x9a.</param>
+        /// <param name="prefixLength">Length of the tag together with its metadata block, i.e. the offset of the outer length byte.</param>
+        /// <param name="longname">The decoded text of the field.</param>
+        /// <returns><see langword="true"/> if a well formed field was read; otherwise, <see langword="false"/>.</returns>
+        /// <remarks>
+        /// The prefix is either the two byte form <c>9A 00</c> or the form <c>9A &lt;L&gt; &lt;L bytes of metadata&gt; 0A</c>, whose metadata
+        /// block is a single zero byte for the built in formats and holds additional entries otherwise.
+        /// </remarks>
+        private static bool TryReadWorksheetColumnLongname(ReadOnlySpan<byte> data, int offset, int prefixLength, out string longname)
         {
             longname = string.Empty;
-            encodedLength = 0;
-            if (offset < 0 || offset > data.Length - 4 || data[offset] != 0x9a)
-                return false;
-            int prefixLength;
-            if (data[offset + 1] == 0)
-                prefixLength = 2;
-            else if (data[offset + 1] == 0x01 && data[offset + 2] == 0x00 && data[offset + 3] == 0x0a)
-                prefixLength = 4;
-            else
+            if (offset < 0 || prefixLength < 2 || data[offset] != 0x9a)
                 return false;
             if (offset > data.Length - prefixLength - 3)
                 return false;
@@ -965,31 +1208,56 @@ namespace Altaxo.Serialization.Origin
                 return false;
             }
 
-            encodedLength = prefixLength + 3 + outerLength;
             return true;
         }
 
+        /// <summary>
+        /// Applies the plot role, the declared value type and the designation records to the located columns.
+        /// </summary>
+        /// <param name="columns">The located datasets in file order.</param>
+        /// <remarks>
+        /// The designation region is separate from the dataset headers, so designations can only be matched to the
+        /// datasets by their order of occurrence. The pass is abandoned as a whole unless the number of accepted
+        /// designations equals the number of datasets and every designation carries the expected ordinal and column
+        /// name; otherwise a single rejected designation would shift all remaining ones onto the wrong columns.
+        /// </remarks>
         private void ApplyWorksheetColumnDesignations(IReadOnlyList<AbstractColumn> columns)
         {
-            if (columns.Count == 0 || columns.Count > 255)
+            if (columns.Count == 0)
                 return;
-            string? book = null;
-            var names = new List<string>();
-            foreach (var column in columns)
+
+            // Collect the datasets of one book and sheet as a group, and remember the column names in file order.
+            var worksheetGroups = new List<(int Start, int Count)>();
+            var names = new List<string>(columns.Count);
+            var namesInWorksheet = new HashSet<string>(StringComparer.Ordinal);
+            string? currentBook = null;
+            int currentSheet = 0;
+            int worksheetStart = 0;
+            for (int i = 0; i < columns.Count; ++i)
             {
-                if (!TryParseWorksheetDatasetName(column.DatasetName, out var currentBook, out var name, out int sheet) ||
-                    sheet != 1 || (book is not null && book != currentBook) || names.Contains(name))
+                if (!TryParseWorksheetDatasetName(columns[i].DatasetName, out var book, out var name, out int sheet))
                     return;
-                book = currentBook;
+                if (currentBook is not null && (book != currentBook || sheet != currentSheet))
+                {
+                    worksheetGroups.Add((worksheetStart, i - worksheetStart));
+                    worksheetStart = i;
+                    namesInWorksheet.Clear();
+                }
+                currentBook = book;
+                currentSheet = sheet;
+                if (namesInWorksheet.Count >= 255 || !namesInWorksheet.Add(name))
+                    return;
                 names.Add(name);
             }
+            worksheetGroups.Add((worksheetStart, columns.Count - worksheetStart));
 
-            var candidates = new List<(int Ordinal, string Name, SpreadColumnType Type, ValueType? ValueType, bool ApplyDesignation, IReadOnlyList<IRecord> Records)>();
+            // A designation consists of a name record and the descriptor record directly behind it.
+            var candidates = new List<(int Ordinal, string Name, SpreadColumnType Type, ValueType? ValueType, ValueTypeSpecification? ValueTypeSpecification, bool ApplyDesignation, IReadOnlyList<IRecord> Records)>();
             for (int i = 1; i + 1 < Records.Count; ++i)
             {
                 if (Records[i] is not TLVRecord nameRecord ||
                     !((nameRecord.Tag == 0x87 && nameRecord.Payload.Length == 2) ||
-                      (nameRecord.Tag == 0x88 && nameRecord.Payload.Length == 1) ||
+                      (nameRecord.Tag == 0x88 && (nameRecord.Payload.Length == 1 || nameRecord.Payload.Length == 2)) ||
                       (nameRecord.Tag == 0x82 && nameRecord.Payload.Length == 2) ||
                       (nameRecord.Tag == 0x83 && nameRecord.Payload.Length == 1)) ||
                     Records[i + 1] is not TLVRecord descriptor ||
@@ -1011,12 +1279,18 @@ namespace Altaxo.Serialization.Origin
                 bool populatedHeader = nameRecord.Tag is 0x82 or 0x83;
                 if (populatedHeader && (Records[i - 1] is not TLVRecord rowMarker || rowMarker.Tag != 0x81 ||
                     rowMarker.Payload.Length != 1 || rowMarker.Payload.Span[0] == 0 || rowMarker.NextOffset != nameRecord.Offset ||
-                    !(((descriptor.Tag == 0x88 && descriptor.Payload.Length == 1 && descriptor.Payload.Span[0] is 0x01 or 0x09) ||
+                    !(((descriptor.Tag == 0x88 && descriptor.Payload.Length is 1 or 2 &&
+                       // The one byte form carries the value type code alone, the two byte form additionally the
+                       // format byte of the value type specification.
+                       descriptor.Payload.Span[0] is 0x01 or 0x02 or 0x03 or 0x04 or 0x05 or 0x09) ||
                        extendedTextNumeric ||
                        (descriptor.Tag == 0x8b && descriptor.Payload.Span.SequenceEqual(new byte[] { 0x01 }))) ||
                       (descriptor.Tag == 0x8f && descriptor.Payload.Span.SequenceEqual(new byte[] { 0x01, 0x50 })) ||
-                      (descriptor.Tag == 0x8d && descriptor.Payload.Span.SequenceEqual(new byte[] { 0x01, 0x00, 0x01, 0x60 })))))
+                      (descriptor.Tag == 0x8d &&
+                       (descriptor.Payload.Span.SequenceEqual(new byte[] { 0x01, 0x00, 0x01, 0x60 }) ||
+                        descriptor.Payload.Span.SequenceEqual(new byte[] { 0x04, 0x00, 0x00, 0x60 }))))))
                     continue;
+                // The designation header in front of the name record is 13 bytes for a populated and 10 bytes for an empty column.
                 int startIndex = i - 1;
                 int startOffset = nameRecord.Offset - (populatedHeader ? 13 : 10);
                 while (startIndex > 0 && Records[startIndex].Offset > startOffset)
@@ -1032,6 +1306,7 @@ namespace Altaxo.Serialization.Origin
                     continue;
 
                 var payload = nameRecord.Payload.Span;
+                // The first byte of the name record is the role code, the last byte is the single character column name.
                 byte code = nameRecord.Tag is 0x87 or 0x82 ? payload[0] : (byte)0;
                 byte nameByte = payload[^1];
                 if (nameByte < 0x21 || nameByte >= 0x7f)
@@ -1049,11 +1324,12 @@ namespace Altaxo.Serialization.Origin
                     8 => SpreadColumnType.Subject,
                     _ => SpreadColumnType.Ignore
                 };
+                // The descriptor tag together with its first payload byte gives the declared value type of the column.
                 ValueType? valueType = descriptor.Tag switch
                 {
                     0x8d or 0x8f or 0x8a or 0x8b => ValueType.Numeric,
                     0x88 when extendedTextNumeric => ValueType.TextNumeric,
-                    0x88 when descriptor.Payload.Length == 1 => descriptor.Payload.Span[0] switch
+                    0x88 when descriptor.Payload.Length is 1 or 2 => descriptor.Payload.Span[0] switch
                     {
                         1 => ValueType.Text,
                         2 => ValueType.Time,
@@ -1071,12 +1347,24 @@ namespace Altaxo.Serialization.Origin
                     },
                     _ => null
                 };
-                candidates.Add((prefix[7], ((char)nameByte).ToString(), type, valueType, !(populatedHeader && descriptor.Tag is 0x8b or 0x8f),
+                // For the value types below the value type code is the high byte of the value type specification
+                // and the optional second payload byte is its format byte. A missing format byte means 0, which is
+                // the default specification of that value type. Numeric, text/numeric, binary and color descriptors
+                // do not carry the specification here, so it stays unresolved for them.
+                ValueTypeSpecification? valueTypeSpecification =
+                    descriptor.Tag == 0x88 && descriptor.Payload.Length is 1 or 2 &&
+                    valueType is ValueType.Text or ValueType.Time or ValueType.Date or ValueType.Month or ValueType.Day
+                    ? (ValueTypeSpecification)((descriptor.Payload.Span[0] << 8) |
+                        (descriptor.Payload.Length == 2 ? descriptor.Payload.Span[1] : 0))
+                    : null;
+                candidates.Add((prefix[7], ((char)nameByte).ToString(), type, valueType, valueTypeSpecification,
+                    !(populatedHeader && descriptor.Tag is 0x8b or 0x8f),
                     Array.AsReadOnly(new IRecord[] { nameRecord, descriptor })));
             }
 
             if (candidates.Count != columns.Count)
                 return;
+            // The designations correspond to the datasets only if their ordinals and names line up exactly.
             for (int i = 0; i < columns.Count; ++i)
                 if (candidates[i].Ordinal != i + 1 || candidates[i].Name != names[i])
                     return;
@@ -1086,10 +1374,23 @@ namespace Altaxo.Serialization.Origin
                 if (candidates[i].ApplyDesignation || columns[i].SpreadColumnType == SpreadColumnType.Ignore)
                     columns[i].SpreadColumnType = candidates[i].Type;
                 columns[i].ValueType = candidates[i].ValueType;
+                if (candidates[i].ValueTypeSpecification is { } specification)
+                    columns[i].ValueTypeSpecification = specification;
                 columns[i].TypeDescriptorRecords = candidates[i].Records;
             }
         }
 
+        /// <summary>
+        /// Determines the data type of a numeric value block from the type header in front of the dataset.
+        /// </summary>
+        /// <param name="widthIndex">The index of the width record of the dataset in <see cref="Records"/>.</param>
+        /// <param name="width">The width record announcing the element width.</param>
+        /// <returns>The data type of the value block, or <see langword="null"/> when the header does not match a known layout.</returns>
+        /// <remarks>
+        /// The type header is delimited by the two records carrying the bytes <c>f0 3f</c> directly in front of the width
+        /// record. Its first byte selects the base type, its second byte the numeric sub type, and the third byte is 3.
+        /// Whether the column is signed or unsigned is taken from the length of the width record.
+        /// </remarks>
         private DeserializedDataType? FindNumericDatasetType(int widthIndex, TLVRecord width)
         {
             int index = widthIndex - 1;
@@ -1101,30 +1402,49 @@ namespace Altaxo.Serialization.Origin
             index -= 2;
             if (index >= 0 && Records[index] is TLVRecord row && row.Tag == 0x84 && row.Payload.Length == 1)
                 --index;
-            if (index < 0 || Records[index] is not TLVRecord header || header.Tag is not (0x81 or 0x86) ||
-                header.Payload.Length != 4 || header.Payload.Span[2] != 3)
+            if (index < 0 || Records[index] is not TLVRecord header ||
+                !((header.Tag is 0x81 or 0x86 && header.Payload.Length == 4 && header.Payload.Span[2] == 3) ||
+                  (header.Tag is 0x82 or 0x87 && header.Payload.Length == 3 && header.Payload.Span[1] == 3)))
                 return null;
             for (int j = index; j < widthIndex; ++j)
                 if (Records[j].NextOffset != Records[j + 1].Offset)
                     return null;
 
             var data = header.Payload.Span;
+            if (width.Payload.Span[0] == 8 &&
+                (header.Payload.Length == 3 && data[0] is 0x50 or 0x60 ||
+                 header.Payload.Length == 4 && data[0] is 1 or 0x10 && data[1] is >= 0x40 and <= 0x6f))
+                return DeserializedDataType.Double;
+            if (header.Payload.Length != 4 || data[1] is < 0x50 or > 0x6f)
+                return null;
+
             bool unsigned = width.Payload.Length == 3;
-            return (data[0], data[1], width.Payload.Span[0], unsigned) switch
+            // The pair of (base type, element width, signedness) selects the data type of the value block.
+            return (data[0], width.Payload.Span[0], unsigned) switch
             {
-                (1, 0x50 or 0x60, 8, false) => DeserializedDataType.Double,
-                (3, 0x50 or 0x60, 4, false) => DeserializedDataType.Single,
-                (1, 0x52 or 0x62, 16, false) => DeserializedDataType.Complex,
-                (1, 0x58 or 0x68, 4, false) => DeserializedDataType.Int32,
-                (1, 0x58 or 0x68, 4, true) => DeserializedDataType.UInt32,
-                (3, 0x58 or 0x68, 2, false) => DeserializedDataType.Int16,
-                (3, 0x58 or 0x68, 2, true) => DeserializedDataType.UInt16,
-                (0x21, 0x58 or 0x68, 1, false) => DeserializedDataType.SByte,
-                (0x21, 0x58 or 0x68, 1, true) => DeserializedDataType.Byte,
+                (1, 8, false) => DeserializedDataType.Double,
+                (3, 4, false) when data[1] is 0x50 or 0x60 => DeserializedDataType.Single,
+                (1, 16, false) => DeserializedDataType.Complex,
+                (1, 4, false) => DeserializedDataType.Int32,
+                (1, 4, true) => DeserializedDataType.UInt32,
+                (3, 2, false) when data[1] is 0x58 or 0x68 => DeserializedDataType.Int16,
+                (3, 2, true) when data[1] is 0x58 or 0x68 => DeserializedDataType.UInt16,
+                (0x21, 1, false) => DeserializedDataType.SByte,
+                (0x21, 1, true) => DeserializedDataType.Byte,
                 _ => null
             };
         }
 
+        /// <summary>
+        /// Determines the plot role of a column from the type record in front of its width record.
+        /// </summary>
+        /// <param name="widthIndex">The index of the width record of the dataset in <see cref="Records"/>.</param>
+        /// <returns>The role of the column and the index of the first record that belongs to the dataset header.</returns>
+        /// <remarks>
+        /// This is the same type header that <see cref="FindNumericDatasetType"/> inspects; here only its second byte is
+        /// of interest, which tells an X column (<c>0x50</c>) from a Y column (<c>0x60</c>). When no such header can be
+        /// proven, the result is <see cref="SpreadColumnType.Ignore"/> together with <paramref name="widthIndex"/>.
+        /// </remarks>
         private (SpreadColumnType Type, int StartIndex) FindWorksheetColumnType(int widthIndex)
         {
             int index = widthIndex - 1;
@@ -1153,6 +1473,15 @@ namespace Altaxo.Serialization.Origin
             return (columnType, index);
         }
 
+        // ----- Value block decoders: turning the encoded bytes of a column into cell values -----
+
+        /// <summary>
+        /// Reads a 7 bit per byte little-endian unsigned integer, as used for row counts and run controls.
+        /// </summary>
+        /// <param name="data">The buffer to read from.</param>
+        /// <param name="position">On input the offset of the value, on output the offset directly behind it.</param>
+        /// <param name="value">The decoded value.</param>
+        /// <returns><see langword="true"/> if a complete value was read; otherwise, <see langword="false"/>.</returns>
         private static bool TryReadUnsignedVariableInteger(ReadOnlySpan<byte> data, ref int position, out uint value)
         {
             value = 0;
@@ -1170,6 +1499,15 @@ namespace Altaxo.Serialization.Origin
             return false;
         }
 
+        /// <summary>
+        /// Decodes the value block of a text column, whose elements are length prefixed UTF-8 strings.
+        /// </summary>
+        /// <param name="startIndex">The index of the record in which the value block starts.</param>
+        /// <param name="dataOffset">The file offset of the value block.</param>
+        /// <param name="values">The decoded cell values.</param>
+        /// <param name="encodedData">The bytes the value block consists of.</param>
+        /// <returns><see langword="true"/> if the block was decoded and terminated as expected.</returns>
+        /// <remarks>The row count is a single byte below 0x80; the block ends with <c>02 01 00 0A</c> or with a run of zero bytes.</remarks>
         private bool TryDecodeTextDataset(int startIndex, int dataOffset,
             [NotNullWhen(true)] out IReadOnlyList<Variant>? values, [NotNullWhen(true)] out byte[]? encodedData)
         {
@@ -1177,6 +1515,7 @@ namespace Altaxo.Serialization.Origin
             encodedData = null;
             int position = dataOffset;
             int index = startIndex;
+            // Local function: reads the given number of bytes of the block, crossing record boundaries as needed.
             bool ReadBytes(int count, [NotNullWhen(true)] out byte[]? bytes)
             {
                 bytes = null;
@@ -1211,6 +1550,7 @@ namespace Altaxo.Serialization.Origin
             int blockLength = position - dataOffset;
             if (!ReadBytes(4, out var trailer))
                 return false;
+            // The block ends with 02 01 00 0A, or with a longer run of zero bytes closed by 0A 00 80 77.
             if (!trailer.AsSpan().SequenceEqual(new byte[] { 0x02, 0x01, 0x00, 0x0a }))
             {
                 if (!trailer.AsSpan().SequenceEqual(new byte[] { 0, 0, 0, 0 }) ||
@@ -1223,6 +1563,20 @@ namespace Altaxo.Serialization.Origin
             return true;
         }
 
+        /// <summary>
+        /// Decodes the value block of a 4 byte (single precision) numeric column.
+        /// </summary>
+        /// <param name="widthIndex">The index of the width record of the dataset, used to locate the row count marker.</param>
+        /// <param name="startIndex">The index of the record in which the value block starts.</param>
+        /// <param name="dataOffset">The file offset of the value block.</param>
+        /// <param name="values">The decoded cell values; rows behind the populated extent become <see cref="double.NaN"/>.</param>
+        /// <param name="encodedData">The bytes the value block consists of.</param>
+        /// <returns><see langword="true"/> if the block was decoded and terminated as expected.</returns>
+        /// <remarks>
+        /// A run is either a single repeated 4 byte value or a literal run of 4 byte values. The encoded capacity of the
+        /// block can be larger than the populated extent of the column, which is taken from the row count marker in front
+        /// of the dataset; only the populated rows have to be non zero.
+        /// </remarks>
         private bool TryDecodeSingleDataset(int widthIndex, int startIndex, int dataOffset,
             [NotNullWhen(true)] out IReadOnlyList<Variant>? values, [NotNullWhen(true)] out byte[]? encodedData)
         {
@@ -1243,6 +1597,7 @@ namespace Altaxo.Serialization.Origin
 
             int position = dataOffset;
             int index = startIndex;
+            // Local function: reads the given number of bytes of the block, crossing record boundaries as needed.
             bool ReadBytes(int count, [NotNullWhen(true)] out byte[]? bytes)
             {
                 bytes = null;
@@ -1255,6 +1610,7 @@ namespace Altaxo.Serialization.Origin
                 position += count;
                 return true;
             }
+            // Local function: reads a 7 bit per byte little-endian unsigned integer from the block.
             bool ReadInteger(out uint value)
             {
                 value = 0;
@@ -1276,6 +1632,7 @@ namespace Altaxo.Serialization.Origin
             int row = 0;
             while (row < result.Length)
             {
+                // An even run control repeats one value, an odd one introduces a literal run of the following values.
                 if (!ReadInteger(out uint control))
                     return false;
                 uint count = (control & 1) == 0 ? control / 2 : control / 2 + 1;
@@ -1311,6 +1668,19 @@ namespace Altaxo.Serialization.Origin
             return true;
         }
 
+        /// <summary>
+        /// Decodes the value block of a text/numeric column, which mixes numbers with references to a shared string pool.
+        /// </summary>
+        /// <param name="data">The bytes of the value block.</param>
+        /// <param name="startIndex">The index of the record in which the value block starts; the string pool follows the block.</param>
+        /// <param name="dataOffset">The file offset of the value block.</param>
+        /// <param name="values">The decoded cell values; blank rows are left as the default <see cref="Variant"/>.</param>
+        /// <returns><see langword="true"/> if the whole block was consumed without leftovers.</returns>
+        /// <remarks>
+        /// A run is introduced by <c>ff ff</c>, a run control and a kind byte. Numbers use the same encoding as numeric
+        /// columns, strings are referenced by their index in the pool, and blanks are announced by their doubled row count.
+        /// A block that ends in the middle of the encoded capacity is closed by <c>ce fa</c>.
+        /// </remarks>
         private bool TryDecodeTextNumericDataset(ReadOnlySpan<byte> data, int startIndex, int dataOffset,
             [NotNullWhen(true)] out IReadOnlyList<Variant>? values)
         {
@@ -1325,6 +1695,7 @@ namespace Altaxo.Serialization.Origin
             var strings = new Dictionary<int, string>();
             if (hasStrings)
             {
+                // The string pool follows the value block. Its header is named _USER_STRINGS_PSET and announces the pool length.
                 int poolOffset = dataOffset + data.Length;
                 while (startIndex < Records.Count && Records[startIndex].NextOffset <= poolOffset)
                     ++startIndex;
@@ -1342,6 +1713,13 @@ namespace Altaxo.Serialization.Origin
                     stringOffset = 55;
                     stringCount = 3;
                 }
+                else if (poolHeader.AsSpan(29, 10).SequenceEqual(new byte[] { 0xf0, 0x16, 0x77, 0x11, 0x11, 0x11, 0x02, 0, 0x01, 0 }) &&
+                    BinaryPrimitives.ReadUInt32LittleEndian(poolHeader.AsSpan(25, 4)) == poolHeader[0] - 31 &&
+                    poolHeader.AsSpan(39, 16).SequenceEqual(new byte[] { 4, 0, 0, 0, 2, 0, 0, 0, 9, 0, 0, 0, 3, 0, 0, 0 }))
+                {
+                    stringOffset = 55;
+                    stringCount = 3;
+                }
                 else if (poolHeader.AsSpan(29, 10).SequenceEqual(new byte[] { 0xf1, 0x04, 0x77, 0x11, 0x11, 0x11, 0x02, 0, 0x01, 0 }) &&
                     BinaryPrimitives.ReadUInt32LittleEndian(poolHeader.AsSpan(25, 4)) == poolHeader[0] - 30 &&
                     BinaryPrimitives.ReadUInt32LittleEndian(poolHeader.AsSpan(39, 4)) == 4 &&
@@ -1356,6 +1734,7 @@ namespace Altaxo.Serialization.Origin
                     !pool.AsSpan(pool.Length - 4).SequenceEqual(new byte[4]))
                     return false;
                 var utf8 = new UTF8Encoding(false, true);
+                // The pool stores its strings consecutively, each terminated by a NUL byte, and is addressed by a one-based index.
                 int offset = stringOffset;
                 int stringEnd = pool.Length - 4;
                 while (offset < stringEnd)
@@ -1379,6 +1758,7 @@ namespace Altaxo.Serialization.Origin
             int row = 0;
             while (row < result.Length)
             {
+                // A run of rows starts with ff ff, a single number is introduced by its compact tag, and 01 00 00 is a blank row.
                 if (data.Length - position < 3)
                     return false;
                 if (data[position] == 0xff && data[position + 1] == 0xff)
@@ -1451,6 +1831,13 @@ namespace Altaxo.Serialization.Origin
             return true;
         }
 
+        /// <summary>
+        /// Decodes a complete value block of an 8 byte numeric column, including its row count header.
+        /// </summary>
+        /// <param name="data">The bytes of the value block.</param>
+        /// <param name="values">The decoded cell values.</param>
+        /// <returns><see langword="true"/> if the block was decoded and consumed; otherwise, <see langword="false"/>.</returns>
+        /// <remarks>The block starts with the block kind byte <c>0x05</c> and a row count; a trailing <c>0x02</c> byte is accepted.</remarks>
         private static bool TryDecodeDoubleValueBlock(ReadOnlySpan<byte> data, [NotNullWhen(true)] out IReadOnlyList<Variant>? values)
         {
             values = null;
@@ -1465,13 +1852,24 @@ namespace Altaxo.Serialization.Origin
             return true;
         }
 
+        /// <summary>
+        /// Reads a double value that is stored with a reduced number of high order bytes.
+        /// </summary>
+        /// <param name="data">The buffer to read from.</param>
+        /// <param name="position">On input the offset of the tag byte, on output the offset directly behind the value.</param>
+        /// <param name="value">The decoded value.</param>
+        /// <returns><see langword="true"/> if a well formed value was read; otherwise, <see langword="false"/>.</returns>
         private static bool TryReadCompactDouble(ReadOnlySpan<byte> data, ref int position, out double value)
         {
             value = default;
             if (position >= data.Length)
                 return false;
-            int length = data[position] switch { 0x11 => 1, 0x1a => 2, 0x50 => 8, _ => 0 };
-            if (length == 0 || data.Length - position - 1 < length)
+            int encodedLength = data[position] - 0x08;
+            if (encodedLength < 9 || encodedLength > 72 || encodedLength % 9 != 0)
+                return false;
+            // The compact tag stores the number of high-order bytes in increments of nine.
+            int length = encodedLength / 9;
+            if (data.Length - position - 1 < length)
                 return false;
             ++position;
             ulong bits = 0;
@@ -1481,6 +1879,21 @@ namespace Altaxo.Serialization.Origin
             return true;
         }
 
+        /// <summary>
+        /// Decodes the rows of a numeric value block, which are stored as repeated values or as delta encoded runs.
+        /// </summary>
+        /// <param name="data">The buffer to read from.</param>
+        /// <param name="position">On input the offset of the first run, on output the offset directly behind the last decoded row.</param>
+        /// <param name="rowCount">The number of rows to decode.</param>
+        /// <param name="values">The decoded rows.</param>
+        /// <param name="unresolvedBlanks"><see langword="true"/> to turn the blank markers into empty values instead of storing them as numbers.</param>
+        /// <returns><see langword="true"/> if the requested number of rows could be decoded; otherwise, <see langword="false"/>.</returns>
+        /// <remarks>
+        /// An even run control repeats one value, which may be the compact form or the marker <c>0x65</c> for "the rest is
+        /// empty". An odd run control introduces a literal run marked by <c>0x0c</c>. In a literal run every value is
+        /// stored as the xor of a prediction and a small difference; the prediction is either the last value seen for the
+        /// current hash (fcm table) or the previous value plus the last difference seen for the current delta hash (dfcm table).
+        /// </remarks>
         private static bool TryDecodeDoubleRows(ReadOnlySpan<byte> data, ref int position, int rowCount, [NotNullWhen(true)] out Variant[]? values, bool unresolvedBlanks = false)
         {
             values = null;
@@ -1509,6 +1922,7 @@ namespace Altaxo.Serialization.Origin
                 }
                 if (data[position++] != 0x0c)
                     return false;
+                // Literal run: both prediction tables are 4096 entries wide and are indexed by a hash of the previous value or difference.
                 ulong previous = 0;
                 var fcm = new ulong[4096];
                 var dfcm = new ulong[4096];
@@ -1523,6 +1937,8 @@ namespace Altaxo.Serialization.Origin
                             return false;
                         pair = data[position++];
                     }
+                    // Two values share one byte: the low nibble first. The low three bits of the code give the number of
+                    // difference bytes, the fourth bit selects the prediction table.
                     int code = (j & 1) == 0 ? pair & 0x0f : pair >> 4;
                     int size = code & 7;
                     if (size >= 4)
@@ -1541,6 +1957,7 @@ namespace Altaxo.Serialization.Origin
                     dfcmHash = (int)(((uint)dfcmHash << 2 ^ delta >> 40) & 0xfff);
                     previous = bits;
                     double value = BitConverter.Int64BitsToDouble(unchecked((long)bits));
+                    // -1.23456789E-300 is the sentinel Origin writes for a blank cell.
                     result[row++] = unresolvedBlanks && value == -1.23456789E-300 ? default : new Variant(value);
                 }
                 if ((count & 1) != 0 && (pair & 0xf0) != 0)
@@ -1550,6 +1967,21 @@ namespace Altaxo.Serialization.Origin
             return true;
         }
 
+        // ----- Record level helpers: reading bytes across the candidate records -----
+
+        /// <summary>
+        /// Copies a range of file bytes out of the parsed records, reassembling the record headers the scanner dropped.
+        /// </summary>
+        /// <param name="startIndex">The index of the first record that may contribute bytes.</param>
+        /// <param name="offset">The file offset of the first byte to copy.</param>
+        /// <param name="count">The number of bytes to copy.</param>
+        /// <param name="bytes">The copied bytes.</param>
+        /// <returns><see langword="true"/> if the whole range is covered by consecutive copyable records.</returns>
+        /// <remarks>
+        /// The tag and length byte of a <see cref="TLVRecord"/> are part of the copied data, so a TLV record contributes
+        /// two more bytes than its payload. Image table and PNG records are never copied, because their content does not
+        /// belong to the object stream.
+        /// </remarks>
         private bool TryCopyRecordBytes(int startIndex, int offset, int count, [NotNullWhen(true)] out byte[]? bytes)
         {
             bytes = null;
@@ -1702,6 +2134,15 @@ namespace Altaxo.Serialization.Origin
             return _records.AsReadOnly();
         }
 
+        /// <summary>
+        /// Searches a candidate record for the start of a worksheet dataset that the scanner swallowed.
+        /// </summary>
+        /// <param name="data">The complete project bytes.</param>
+        /// <param name="candidateOffset">The offset of the candidate record that may contain the dataset start.</param>
+        /// <param name="candidateEnd">The exclusive end of that candidate record.</param>
+        /// <param name="datasetOffset">The offset of the width record of the dataset, or -1 when none was found.</param>
+        /// <returns><see langword="true"/> if a validated dataset header starts inside the candidate record.</returns>
+        /// <remarks>Splitting a record is only allowed on a complete dataset header, so that the remaining bytes stay an unknown region.</remarks>
         private static bool TryFindEmbeddedWorksheetDatasetStart(byte[] data, int candidateOffset, int candidateEnd, out int datasetOffset)
         {
             datasetOffset = -1;
@@ -1718,6 +2159,16 @@ namespace Altaxo.Serialization.Origin
             return false;
         }
 
+        /// <summary>
+        /// Checks whether the bytes at the given offset form the beginning of a worksheet dataset.
+        /// </summary>
+        /// <param name="data">The complete project bytes.</param>
+        /// <param name="offset">The offset to check, which is expected to hold the width record of a dataset.</param>
+        /// <returns><see langword="true"/> if width, name marker, dataset name, descriptor and envelope all match.</returns>
+        /// <remarks>
+        /// This is the scanner side of the dataset recognition performed by <see cref="FindWorksheetDatasetCandidates"/>.
+        /// It reads the records directly from the file bytes, because the scanner has not produced records for this area yet.
+        /// </remarks>
         private static bool HasWorksheetDatasetHeader(byte[] data, int offset)
         {
             if (!TryReadTLVRecord(data, offset, 0x60, out var nameMarker) || nameMarker.Tag != 0x91 ||
@@ -1739,14 +2190,7 @@ namespace Altaxo.Serialization.Origin
                 return false;
 
             if (!TryReadTLVRecord(data, nameRecord.NextOffset, 0x60, out var descriptor) ||
-                !((descriptor.Tag == 0x8f &&
-                   (descriptor.Payload.Span.StartsWith(new byte[] { 0xc8, 0x10 }) ||
-                    descriptor.Payload.Span.StartsWith(new byte[] { 0xca, 0x10 }) ||
-                    descriptor.Payload.Span.StartsWith(new byte[] { 0xe8, 0x10 }))) ||
-                  (descriptor.Tag == 0x8d && descriptor.Payload.Span.StartsWith(new byte[] { 0xca, 0x10 })) ||
-                  (descriptor.Tag is 0x8e or 0x90 && descriptor.Payload.Length == 4 &&
-                   (descriptor.Payload.Span.StartsWith(new byte[] { 0xc8, 0x10 }) ||
-                    descriptor.Payload.Span.StartsWith(new byte[] { 0xca, 0x10 })))) ||
+                !IsWorksheetDatasetDescriptor(descriptor) ||
                 !TryReadTLVRecord(data, descriptor.NextOffset, 0x60, out var envelope) ||
                 envelope.Tag is not (0x9b or 0x9d) || envelope.Payload.Length != 24 ||
                 !envelope.Payload.Span[..8].SequenceEqual(new byte[] { 0x18, 0, 0, 0, 0, 0, 0, 0 }) ||
@@ -1755,6 +2199,35 @@ namespace Altaxo.Serialization.Origin
                 return false;
 
             return true;
+        }
+
+        /// <summary>
+        /// Tells whether a record is the short descriptor that sits between a dataset name and the
+        /// envelope of its value block.
+        /// </summary>
+        /// <remarks>
+        /// A tag only names a value class in this format, not a field role, and the tag used for this
+        /// descriptor varies: 0x87, 0x8d, 0x8e, 0x8f, 0x90 and 0x93 were observed, sometimes even for
+        /// the columns of one and the same workbook. The four byte form therefore is recognized by its
+        /// shape (two little-endian 16 bit values whose high bytes are 0x10 and 0x03 or 0x04) instead
+        /// of by its tag. The two byte form is restricted to the tag and prefixes seen so far.
+        /// </remarks>
+        /// <param name="descriptor">The candidate descriptor record.</param>
+        /// <returns><see langword="true"/> if the record has the shape of a worksheet dataset descriptor.</returns>
+        private static bool IsWorksheetDatasetDescriptor(TLVRecord descriptor)
+        {
+            var payload = descriptor.Payload.Span;
+            return (descriptor.Tag == 0x8f &&
+                    (payload.StartsWith(new byte[] { 0xc8, 0x10 }) ||
+                     payload.StartsWith(new byte[] { 0xca, 0x10 }) ||
+                     payload.StartsWith(new byte[] { 0xe8, 0x10 }))) ||
+                   (descriptor.Tag == 0x8d && payload.StartsWith(new byte[] { 0xca, 0x10 })) ||
+                   (descriptor.Tag is 0x8e or 0x90 && payload.Length == 4 &&
+                    (payload.StartsWith(new byte[] { 0xc8, 0x10 }) ||
+                     payload.StartsWith(new byte[] { 0xca, 0x10 }))) ||
+                   (descriptor.Tag is 0x87 or 0x93 && payload.Length == 4 &&
+                    (payload[0] is 0xc8 or 0xca or 0xe8) && payload[1] == 0x10 &&
+                    payload[3] is 0x03 or 0x04);
         }
 
         /// <summary>Inserts a record in ascending offset order.</summary>
@@ -1786,6 +2259,15 @@ namespace Altaxo.Serialization.Origin
         }
 
 
+        /// <summary>
+        /// Reads a block introduced by a little-endian 32 bit length and delimited by 0x0a bytes.
+        /// </summary>
+        /// <param name="data">The complete project bytes.</param>
+        /// <param name="offset">The offset of the length prefix.</param>
+        /// <param name="maximumLength">The maximum accepted block length; not evaluated by this check.</param>
+        /// <param name="record">The block that was read.</param>
+        /// <returns><see langword="true"/> if the length prefix and the delimiters are valid.</returns>
+        /// <remarks>Such a block is not interpreted as objects; it is kept as an <see cref="UnknownRegionRecord"/>.</remarks>
         bool TryReadLengthPrefixedBlock(byte[] data, int offset, int maximumLength, [NotNullWhen(true)] out IRecord record)
         {
             var (isPrefix, length) = IsBlockLengthPrefix(data, offset, maximumLength);
@@ -1802,6 +2284,13 @@ namespace Altaxo.Serialization.Origin
             return true;
         }
 
+        /// <summary>
+        /// Checks whether the four bytes at the given offset are the length prefix of a block delimited by 0x0a bytes.
+        /// </summary>
+        /// <param name="data">The complete project bytes.</param>
+        /// <param name="offset">The offset of the candidate length prefix.</param>
+        /// <param name="maximumLength">The maximum accepted block length; not evaluated by this check.</param>
+        /// <returns>A pair telling whether the prefix is valid and, if so, which block length it announces.</returns>
         (bool isPrefix, int length) IsBlockLengthPrefix(byte[] data, int offset, int maximumLength)
         {
             if (offset >= data.Length - 5)
@@ -1820,12 +2309,15 @@ namespace Altaxo.Serialization.Origin
         }
 
 
-        /// <summary>Locates PNG images using the observed embedded-preview index.</summary>
+        /// <summary>Locates the embedded preview images using the observed image index and adds them as records.</summary>
         /// <param name="data">The complete project bytes.</param>
-        /// <param name="imageTableOffset">The index where the image table starts.</param>
-        /// <param name="bodyStart">The index of the start of the body</param>
-        /// <returns>Validated image offsets and lengths in file order, or an empty list if the index is absent or invalid.</returns>
-        /// <remarks>The index layout is inferred from observed files. An invalid entry causes the entire index to be ignored.</remarks>
+        /// <param name="imageTableOffset">The offset where the image table starts.</param>
+        /// <param name="bodyStart">The offset of the start of the body, which bounds the image offsets.</param>
+        /// <remarks>
+        /// The index layout is inferred from observed files. Every entry has to frame a complete PNG image and the entries
+        /// must not overlap. The scanner treats the located images as boundaries that TLV scanning cannot cross.
+        /// </remarks>
+        /// <exception cref="InvalidDataException">The index is truncated, an entry does not frame a PNG image, or entries overlap.</exception>
         private void FindIndexedPngs(byte[] data, int imageTableOffset, int bodyStart)
         {
             var images = new List<(int Offset, int Length)>();
@@ -1879,9 +2371,15 @@ namespace Altaxo.Serialization.Origin
             }
         }
 
-        /// <summary>Finds possible sheet names in adjacent parsed records matching an observed signature.</summary>
-        /// <returns>Printable sheet-name candidates with their file offsets.</returns>
-        /// <remarks>The signature does not establish a sheet's type or parent book.</remarks>
+        /// <summary>
+        /// Reads a worksheet sheet name from the records around the given index.
+        /// </summary>
+        /// <param name="index">The index of the record carrying the column count of the sheet.</param>
+        /// <param name="candidate">The recovered sheet name together with its file offset.</param>
+        /// <param name="number">The one-based sheet number taken from the ordinal marker in front of the name.</param>
+        /// <param name="columns">The number of columns of the sheet.</param>
+        /// <returns><see langword="true"/> if the records form a sheet name entry; otherwise, <see langword="false"/>.</returns>
+        /// <remarks>The signature does not establish a sheet's type or its parent book.</remarks>
         private bool TryReadWorksheetSheetName(int index, [NotNullWhen(true)] out SheetNameCandidate? candidate,
             out int number, out int columns)
         {
@@ -1931,6 +2429,10 @@ namespace Altaxo.Serialization.Origin
             return true;
         }
 
+        /// <summary>Finds possible sheet names in adjacent parsed records matching an observed signature.</summary>
+        /// <returns>Printable sheet-name candidates with their file offsets.</returns>
+        /// <remarks>Two different sheet signatures are scanned for: the worksheet signature handled by
+        /// <see cref="TryReadWorksheetSheetName"/> and the matrix sheet signature that follows a <c>0x94</c> marker.</remarks>
         private IReadOnlyList<SheetNameCandidate> FindSheetNameCandidates()
         {
             var candidates = new List<SheetNameCandidate>();
@@ -1962,6 +2464,7 @@ namespace Altaxo.Serialization.Origin
             return candidates.AsReadOnly();
         }
 
+        // ----- Matrix and window candidates: locating matrix sheets and book windows -----
 
         /// <summary>Gets possible matrix dataset names followed by the observed matrix type marker.</summary>
         /// <remarks>These are heuristic matches, not decoded matrix objects.</remarks>
@@ -2064,6 +2567,15 @@ namespace Altaxo.Serialization.Origin
             return null;
         }
 
+        /// <summary>
+        /// Collects the window candidates of the project, which introduce the byte area belonging to one book window.
+        /// </summary>
+        /// <returns>The index of the record carrying the window name and the window name itself, in file order.</returns>
+        /// <remarks>
+        /// A window candidate is recognized by the geometry record and the five byte marker that follow its name. The
+        /// candidates bound the searches for sheet names, column widths and book metadata; their order is also used to
+        /// number the files inside the project tree.
+        /// </remarks>
         private List<(int Index, string Name)> FindWindowCandidates()
         {
             var windows = new List<(int Index, string Name)>();
@@ -2075,9 +2587,79 @@ namespace Altaxo.Serialization.Origin
                      geometry.Tag == 0x91 && geometry.Payload.Length == 15 && marker.Tag == 0x81) &&
                     TryGetWindowName(Records[i], out var name) &&
                     Records[i].NextOffset == geometry.Offset && geometry.NextOffset == marker.Offset)
+                {
+                    windows.Add((i, name));
+                    continue;
+                }
+
+                if (i + 1 < Records.Count && TryGetWindowCandidateWithInlineGeometry(Records[i], Records[i + 1], out name))
                     windows.Add((i, name));
             }
             return windows;
+        }
+
+        /// <summary>
+        /// Reads a window candidate whose geometry and marker the scanner folded into the record carrying its name.
+        /// </summary>
+        /// <param name="nameRecord">The candidate record that contains the window name.</param>
+        /// <param name="followingRecord">The record behind it, which may hold the marker of the window.</param>
+        /// <param name="name">The recovered ASCII window name.</param>
+        /// <returns><see langword="true"/> if exactly one window name with a valid geometry and marker was found.</returns>
+        private static bool TryGetWindowCandidateWithInlineGeometry(IRecord nameRecord, IRecord followingRecord,
+            [NotNullWhen(true)] out string? name)
+        {
+            name = null;
+            ReadOnlySpan<byte> payload = nameRecord switch
+            {
+                TLVRecord tlv => tlv.Payload.Span,
+                UnknownRegionRecord region => region.Payload.Span,
+                _ => ReadOnlySpan<byte>.Empty
+            };
+            string? candidateName = null;
+            for (int i = Math.Max(0, payload.Length - 258); i + 7 < payload.Length; ++i)
+            {
+                if (payload[i] != 0x80 || payload[i + 2] < 3 || payload[i + 3] != 0 || payload[i + 4] != 0)
+                    continue;
+
+                int nameLength = payload[i + 2] - 2;
+                int geometryOffset = i + 5 + nameLength;
+                if (geometryOffset > payload.Length - 2)
+                    continue;
+                byte geometryTag = payload[geometryOffset];
+                int geometryLength = payload[geometryOffset + 1];
+                int markerOffset = geometryOffset + 2 + geometryLength;
+                bool markerIsValid = false;
+                if (markerOffset == payload.Length && followingRecord is TLVRecord marker &&
+                    nameRecord.NextOffset == marker.Offset && marker.Payload.Length == 5)
+                    markerIsValid = geometryLength == 12 && marker.Tag == 0x84 ||
+                        geometryTag == 0x91 && geometryLength == 15 && marker.Tag == 0x81;
+                else if (markerOffset <= payload.Length - 2)
+                {
+                    byte markerTag = payload[markerOffset];
+                    int markerLength = payload[markerOffset + 1];
+                    markerIsValid = markerOffset + 2 + markerLength <= payload.Length && markerLength == 5 &&
+                        (geometryLength == 12 && markerTag == 0x84 ||
+                         geometryTag == 0x91 && geometryLength == 15 && markerTag == 0x81);
+                }
+                if (!markerIsValid)
+                    continue;
+
+                var nameBytes = payload.Slice(i + 5, nameLength);
+                bool printable = true;
+                foreach (byte value in nameBytes)
+                    printable &= value >= 0x20 && value < 0x7f;
+                if (!printable)
+                    continue;
+
+                if (candidateName is not null)
+                    return false;
+                candidateName = Encoding.ASCII.GetString(nameBytes);
+            }
+
+            if (candidateName is null)
+                return false;
+            name = candidateName;
+            return true;
         }
 
         /// <summary>Tries to find a printable window name at the end of a parsed record payload.</summary>

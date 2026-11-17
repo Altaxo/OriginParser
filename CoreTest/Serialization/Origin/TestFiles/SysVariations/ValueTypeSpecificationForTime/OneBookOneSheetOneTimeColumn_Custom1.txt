@@ -1,0 +1,23 @@
+Content of the Origin file
+
+The content consist of one Worksheet with Name='BisonRoundAbo', LongName='Ößberg', which is located in the folder 'Krüger'. Inside the worksheet is a sheet 'Äalesund'.
+The sheet contains one column named 'A' with 39 rows, ValueType 'time', ValueTypeSpecification='Custom' with custom string 'hh:mm:ss;### T', column width=17.7. 
+The SpreadColumnType of column 'A' is 'Y', the LongName of column 'A' is 'TimeColumn', the unit of column 'A' is 'h' and the comment of column 'A' is 'ÖÜÄ'.
+Column A contains the following values:
+
+| Row | A            |
+| -   | -            |
+| 0   | 00:00:00.000 |
+| 1   | 01:00:00.000 |
+| 2   | 02:00:00.000 |
+| 3   | 03:00:00.000 |
+| 4   | 04:00:00.000 |
+| 5   | 23:59:59.999 |
+| 6   | 24:00:00.000 |
+| 7   | 25:00:00.000 |
+| 8   | 99:00:00.123 |
+
+
+Changes with respect to OneBookOneSheetOneTimeColumn_HH_MM_SS_ZZZ.opju:
+- changed ValueTypeSpecification of column 'A' to 'Custom' with custom string 'hh:mm:ss;### T'.
+

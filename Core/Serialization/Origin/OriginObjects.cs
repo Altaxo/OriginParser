@@ -153,6 +153,7 @@ namespace Altaxo.Serialization.Origin
         // Time Format:
         // hh:mm | hh | hh:mm:ss | hh:mm:ss.zz | hh ap | hh:mm ap | mm:ss
         // mm:ss.zz | hhmm | hhmmss | hh:mm:ss.zzz
+        // ddd | ddd:hh | ddd:hh:mm | ddd:hh:mm:ss | ddd:hh:mm:ss.zz | ddd:hh:mm:ss.zzzzzz | custom1
 
         /// <summary>Time format <c>hh:mm</c>.</summary>
         Time_HH_MM = 0x0200,
@@ -186,6 +187,27 @@ namespace Altaxo.Serialization.Origin
 
         /// <summary>Time format <c>hh:mm:ss.zzz</c>.</summary>
         Time_HH_MM_SS_ZZZ = 0x020A,
+
+        /// <summary>Time format <c>ddd</c>.</summary>
+        Time_DDD = 0x020B,
+
+        /// <summary>Time format <c>ddd:hh</c>.</summary>
+        Time_DDD_HH = 0x020C,
+
+        /// <summary>Time format <c>ddd:hh:mm</c>.</summary>
+        Time_DDD_HH_MM = 0x020D,
+
+        /// <summary>Time format <c>ddd:hh:mm:ss</c>.</summary>
+        Time_DDD_HH_MM_SS = 0x020E,
+
+        /// <summary>Time format <c>ddd:hh:mm:ss.zz</c>.</summary>
+        Time_DDD_HH_MM_SS_ZZ = 0x020F,
+
+        /// <summary>Time format <c>ddd:hh:mm:ss.zzzzzz</c>.</summary>
+        Time_DDD_HH_MM_SS_ZZZZZZ = 0x0210,
+
+        /// <summary>First user defined time format.</summary>
+        Time_Custom1 = 0x0211,
 
 
         // Date Format:
@@ -753,6 +775,19 @@ namespace Altaxo.Serialization.Origin
             V_STRING
         };
 
+        public override string ToString()
+        {
+            switch (_type)
+            {
+                case VType.V_DOUBLE:
+                    return $"Double: {_double.ToString()}";
+                case VType.V_STRING:
+                    return $"String: \"{_string ?? string.Empty}\"";
+                default:
+                    return $"Type: {_type}";
+            }
+        }
+
         /// <summary>Returns the currently stored variant type.</summary>
         /// <returns>The currently stored variant type.</returns>
         public VType ValueType()
@@ -817,6 +852,8 @@ namespace Altaxo.Serialization.Origin
         public readonly bool IsDouble => _type == VType.V_DOUBLE;
         /// <summary>True when the variant contains a double or has no string value.</summary>
         public readonly bool IsDoubleOrNaN => _type == VType.V_DOUBLE || string.IsNullOrEmpty(_string);
+
+        public readonly bool IsCellEmpty => _type == VType.V_Empty || string.IsNullOrEmpty(_string) || double.IsNaN(_double);
 
         /// <summary>Return the contained value as double or NaN when empty.</summary>
         /// <returns>The double value or NaN.</returns>

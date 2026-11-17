@@ -24,10 +24,18 @@ namespace Altaxo.Serialization.Origin.SysVariations
             using var stream = File.OpenRead(path);
             var parser = new OriginOpjuParser(stream);
 
-            Assert.Single(parser.Books); // there is only one Book
-            Assert.Equal("Book1", parser.Books[0].Name); // named 'Book1'
-            Assert.Single(parser.Books[0].Sheets); // with one sheet inside
-            Assert.Equal(3, parser.Books[0].Sheets[0].Columns.Count); // with the expected number of columns
+            Assert.Single(parser.Books);
+            var book = parser.Books[0];
+            Assert.Equal("Book1", book.Name); // named 'Book1'
+            Assert.Equal("Ößberg", book.LongName);
+            Assert.Equal("Meßfolder", book.FolderName);
+
+            Assert.Single(book.Sheets);
+            var sheet = book.Sheets[0];
+            Assert.Equal("Äalesund", sheet.Name);
+            var columns = sheet.Columns;
+            Assert.Equal(3, columns.Count);
+
 
             for (int i = 0; i < 3; i++)
             {
@@ -43,6 +51,18 @@ namespace Altaxo.Serialization.Origin.SysVariations
 
                 Assert.Equal(ValueType.Numeric, column.ValueType); // the expected column types are checked
                 Assert.Equal(expectedColumnType, column.DeserializedDataType); // the expected column types are checked
+                Assert.Equal(SpreadColumnType.Y, column.SpreadColumnType);
+                Assert.Equal(6.7, column.Width, 1E-6); // the columns width is expected to be 6.7 for all columns
+                Assert.Empty(column.LongName);
+                Assert.Empty(column.Unit);
+                Assert.Empty(column.Comment);
+                if (column.Values is not null)
+                {
+                    for (int j = 0; j < column.Values.Count; j++)
+                    {
+                        Assert.True(column.Values[j].IsCellEmpty); // we have no values, so all values should be NaN
+                    }
+                }
             }
         }
     }
