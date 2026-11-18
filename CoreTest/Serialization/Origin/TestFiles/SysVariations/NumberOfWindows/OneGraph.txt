@@ -1,0 +1,7 @@
+Content of the Origin file
+
+The first window is a Graph with Name='Valencia', Longname='Tromsø' and Comment='This is the graph window V_a_l_e_n_c_i_a'. Graph 'Valencia' is located in the folder 'München\Östen'.
+
+Changes with respect to the reference file 'OneEmptyWorksheet.opju':
+- added graph 'Valencia' with the properties described above
+- deleted worksheet 'Biro'

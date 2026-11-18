@@ -207,6 +207,39 @@ namespace Altaxo.Serialization.Origin.Tests
         }
 
 
+        /// <summary>Checks that a project without any preview image has neither an image table nor PNG records.</summary>
+        /// <param name="fileName">The fixture file name below the <c>SysVariations</c> folder.</param>
+        /// <remarks>
+        /// The <c>PrvwOPJU</c> marker is written even for projects that only hold notes windows; for those the
+        /// 8 byte image table pointer behind the marker is null instead of an offset.
+        /// </remarks>
+        [Theory]
+        [InlineData(@"NumberOfWindows\OneNote.opju")]
+        [InlineData(@"NumberOfWindows\TwoNotes.opju")]
+        public void ReadsWithoutPreviewImages(string fileName)
+        {
+            var path = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Serialization", "Origin", "TestFiles", "SysVariations", fileName);
+            var bytes = File.ReadAllBytes(path);
+            using var stream = new MemoryStream(bytes);
+            var parser = new OriginOpjuParser(stream);
+
+            Assert.Empty(parser.Records.OfType<OriginOpjuParser.PngRecord>());
+            Assert.Empty(parser.Records.OfType<OriginOpjuParser.ImageTable>());
+
+            var marker = Assert.Single(parser.Records.OfType<OriginOpjuParser.TLVRecord>(), record => record.Payload.Span.StartsWith("PrvwOPJU"u8));
+            Assert.Equal(0UL, BinaryPrimitives.ReadUInt64LittleEndian(marker.Payload.Span.Slice(8, 8)));
+
+            // As in the projects with images, every body byte must belong to exactly one record.
+            int position = parser.BodyOffset + 7;
+            foreach (var record in parser.Records)
+            {
+                Assert.Equal(position, record.Offset);
+                Assert.True(record.NextOffset > record.Offset);
+                position = record.NextOffset;
+            }
+            Assert.Equal(bytes.Length, position);
+        }
+
 
         /// <summary>Checks parsed header fields and candidate record bounds against each real project.</summary>
         /// <param name="fileName">The fixture file name.</param>

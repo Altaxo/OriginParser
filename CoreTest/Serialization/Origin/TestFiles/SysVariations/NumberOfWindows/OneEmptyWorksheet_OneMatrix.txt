@@ -1,0 +1,10 @@
+Content of the Origin file
+
+The first window is a Worksheet with Name='Biro', Longname='Ächt' and Comment='This is the worksheet window B_i_r_o'. Worksheet 'Biro' is located in the folder 'München'. Inside of 'Biro' is a sheet 'Kübel'.
+The sheet's dimensions are 14 rows x 0 columns. So it has no content.
+
+The second window is a Matrix with Name='Aachen', Longname='Locomotive' and Comment='This is the matrix window A_a_c_h_e_n'. Matrix 'Aachen' is located in the folder 'Mömmern\Döra'. Inside of matrix 'Aachen' is a matrix sheet 'Maßricht'.
+Sheet 'Maßricht' has the following properties: columnWidth=7.2 ; ValueType='Double'; Dimensions=(93 rows x 37 columns).
+
+Changes with respect to the reference file 'OneEmptyWorksheet.opju':
+- added Matrix 'Aachen' with the properties described above

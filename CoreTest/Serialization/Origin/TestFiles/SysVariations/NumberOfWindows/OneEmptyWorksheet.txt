@@ -1,0 +1,7 @@
+Content of the Origin file
+
+The content is a Worksheet window with Name='Biro', Longname='Ächt', Comment='This is the worksheet window B_i_r_o'. Worksheet 'Biro' is located in the folder 'München'. Inside of 'Biro' is a sheet 'Kübel'.
+The sheet's dimensions are 14 rows x 0 columns. So it has no content.
+
+
+This is the reference .opju file for all other files in this folder.

@@ -1,0 +1,22 @@
+Content of the Origin file
+
+The first window is a Note window with Name='Lenja', Longname='Kassel' and Comment='This is the note window L_e_n_j_a'. Note 'Lenja' is located in the folder 'München\Björn'.
+
+The content of Note 'Lenja' consists of two lines:
+```
+This is content inside the notes window:
+Here a second line.
+```
+
+The second window is a Note window with Name='Lissabon', Longname='Ärmel' and Comment='This is the note window L_i_s_s_a_b_o_n'. Note 'Lissabon' is located in the folder 'Oscar'.
+
+The content of Note 'Lenja' consists of one line:
+```
+Here we have the text inside the note window L-i-s-s-a-b-o-n.
+```
+
+
+Changes with respect to the reference file 'OneEmptyWorksheet.opju':
+- added Note 'Lenja' with the properties described above.
+- added Note 'Lissabon' with the properties described above.
+- deleted worksheet 'Biro'

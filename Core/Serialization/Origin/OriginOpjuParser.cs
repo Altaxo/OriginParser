@@ -151,6 +151,42 @@ namespace Altaxo.Serialization.Origin
         }
 
         /// <summary>
+        /// A window description record. In contrast to the other candidate records, its payload is not opaque: it
+        /// itself consists of a name field followed by a run of child records and a trailing block.
+        /// </summary>
+        /// <remarks>
+        /// A window description is the only observed record whose declared length exceeds the length limit that the
+        /// scanner uses to resynchronize, so it is never recognized as a plain candidate record. Its payload is
+        /// <c>&lt;name field length&gt; 00 00 &lt;name&gt;</c>, then the child records, then a trailing block that begins
+        /// where the child records end and that carries e.g. the long name of the window.
+        /// </remarks>
+        /// <param name="Offset">The byte offset of the tag from the beginning of the file.</param>
+        /// <param name="Tag">The tag of the record.</param>
+        /// <param name="Payload">The bytes between the length byte and the end of the record.</param>
+        /// <param name="Name">The window name taken from the name field of the payload.</param>
+        /// <param name="Children">The child records of the payload in file order.</param>
+        [System.Diagnostics.DebuggerDisplay("{DebuggerDisplay,nq}")]
+        public sealed record WindowRecord(int Offset, byte Tag, ReadOnlyMemory<byte> Payload, string Name, IReadOnlyList<TLVRecord> Children) : IRecord
+        {
+            /// <summary>Gets a one-line view of the window name and child count for the debugger.</summary>
+            private string DebuggerDisplay => $"WIN Offs={Offset:X}, Tag={Tag:X2}, L={Payload.Length:X2}, Name={Name}, Children={Children.Count}";
+
+            /// <inheritdoc/>
+            public int NextOffset => Offset + 2 + Payload.Length;
+
+            /// <summary>
+            /// Dumps the content, including the child records, to the specified writer.
+            /// </summary>
+            /// <param name="writer">The writer.</param>
+            public void Dump(TextWriter writer)
+            {
+                writer.WriteLine($"{Offset:X8}: WINDOW Tag={Tag:X2} Length={Payload.Length:X2} Name=\"{Name}\" Children={Children.Count}");
+                foreach (var child in Children)
+                    writer.WriteLine($"          {child.Offset:X8}:   TLV Tag={child.Tag:X2} Content={BitConverter.ToString(child.Payload.Span[..Math.Min(16, child.Payload.Length)].ToArray()).Replace('-', ' ')}");
+            }
+        }
+
+        /// <summary>
         /// Represents the preview image table record, which contains the offsets and lengths of the embedded PNG images in the OPJU file.
         /// </summary>
         /// <param name="Offset">The byte offset of the table in the file.</param>
@@ -208,6 +244,8 @@ namespace Altaxo.Serialization.Origin
             public string FolderName { get; set; } = string.Empty;
             /// <summary>Gets or sets the long name of the book; empty when it was not recovered.</summary>
             public string LongName { get; set; } = string.Empty;
+            /// <summary>Gets or sets the comment of the book; empty when it was not recovered.</summary>
+            public string Comment { get; set; } = string.Empty;
         }
 
         /// <summary>A worksheet sheet, identified by the sheet number encoded in the dataset names.</summary>
@@ -330,6 +368,13 @@ namespace Altaxo.Serialization.Origin
 
         /// <summary>The records built up by <see cref="ParseIntoRecords"/> in ascending offset order.</summary>
         private List<IRecord> _records = new List<IRecord>();
+
+        /// <summary>
+        /// The maximum payload length a plain candidate record may declare. Longer records are only accepted as
+        /// window descriptions (see <see cref="TryReadWindowRecord"/>), because a longer length byte would make the
+        /// resynchronization after an unknown region unreliable.
+        /// </summary>
+        private const int MaxTLVLength = 0x60;
         /// <summary>The complete project bytes, used where raw byte access is needed instead of the record view.</summary>
         private byte[] _fileData = [];
 
@@ -372,7 +417,9 @@ namespace Altaxo.Serialization.Origin
             var worksheetColumns = FindWorksheetDatasetCandidates();
             ApplyWorksheetColumnDesignations(worksheetColumns);
             ApplyWorksheetColumnLongnames(worksheetColumns);
-            (Books, UnassociatedColumns) = GroupWorksheetDatasets(worksheetColumns);
+            (var books, UnassociatedColumns) = GroupWorksheetDatasets(worksheetColumns);
+            // A worksheet without any column produces no dataset name, so its book has to be taken from its window.
+            Books = AddWindowOnlyBooks(books);
             ApplyWorksheetSheetNames();
             ApplyWorksheetColumnWidths();
             ApplyWorksheetBookMetadata();
@@ -381,10 +428,11 @@ namespace Altaxo.Serialization.Origin
         // ----- Interpretation passes: worksheet books, sheets and their columns -----
 
         /// <summary>
-        /// Applies the long name of every book that is shown in exactly one window.
+        /// Applies the long name and the comment of every book that is shown in exactly one window.
         /// </summary>
         /// <remarks>
-        /// The long name of a book is stored behind a fixed marker inside the description of its window. The searched
+        /// The long name of a book is stored behind a fixed marker inside the description of its window; the comment
+        /// of the window, if it has one, follows in the same text behind a line break. The searched
         /// area ends at the next window candidate or at the first indexed preview image. A book is only given a long
         /// name when its name occurs exactly once among the books and among the windows, and when the area contains
         /// exactly one decodable long name.
@@ -411,7 +459,10 @@ namespace Altaxo.Serialization.Origin
                 if (book is null || bookCount != 1 || windowCount != 1)
                     continue;
 
-                int start = Records[windows[w].Index].NextOffset;
+                // The long name of a window description is stored inside the record itself, so the search area
+                // starts at the record and not behind it.
+                var windowRecord = Records[windows[w].Index];
+                int start = windowRecord is WindowRecord ? windowRecord.Offset : windowRecord.NextOffset;
                 int end = w + 1 < windows.Count ? Records[windows[w + 1].Index].Offset : _fileData.Length;
                 for (int i = windows[w].Index + 1; i < Records.Count && Records[i].Offset < end; ++i)
                     if (Records[i] is PngRecord)
@@ -420,8 +471,9 @@ namespace Altaxo.Serialization.Origin
                         break;
                     }
                 string? longName = null;
+                string? comment = null;
                 bool ambiguous = false;
-                // Behind the marker follows a length byte, the name bytes, a NUL byte and a 0x0a terminator.
+                // Behind the marker follows a length byte, the text bytes, a NUL byte and a 0x0a terminator.
                 for (int p = start; p <= end - longNameMarker.Length - 1; ++p)
                 {
                     if (!_fileData.AsSpan(p, longNameMarker.Length).SequenceEqual(longNameMarker))
@@ -436,9 +488,12 @@ namespace Altaxo.Serialization.Origin
                         var nameBytes = _fileData.AsSpan(lengthOffset + 1, length - 1);
                         if (nameBytes.Contains((byte)0))
                             continue;
-                        var name = new UTF8Encoding(false, true).GetString(nameBytes);
+                        var text = new UTF8Encoding(false, true).GetString(nameBytes);
+                        // The text holds the long name and, behind a line break, the comment of the window.
+                        int lineBreak = text.IndexOf("\r\n", StringComparison.Ordinal);
                         ambiguous |= longName is not null;
-                        longName = name;
+                        longName = lineBreak < 0 ? text : text[..lineBreak];
+                        comment = lineBreak < 0 ? null : text[(lineBreak + 2)..];
                     }
                     catch (DecoderFallbackException)
                     {
@@ -446,7 +501,11 @@ namespace Altaxo.Serialization.Origin
                     }
                 }
                 if (!ambiguous && longName is not null)
+                {
                     book.LongName = longName;
+                    if (comment is not null)
+                        book.Comment = comment;
+                }
             }
 
             ApplyWorksheetFolders(windows);
@@ -578,30 +637,31 @@ namespace Altaxo.Serialization.Origin
             if (position >= end || (_fileData[position] & 1) != 0)
                 return false;
             int fileCount = _fileData[position++] / 2;
-            if (fileCount > windowCount || (fileCount > 0 && (position >= end || _fileData[position++] != 0)))
-                return false;
             string path = root ? string.Empty : parent.Length == 0 ? name : parent + "\\" + name;
             if (!root && (name.Length == 0 || name.Contains('\\')))
                 return false;
             for (int i = 0; i < fileCount; ++i)
             {
-                // Two entry forms occur: a five byte form without an ordinal and a seven byte form whose fifth byte is the window ordinal.
-                int ordinal;
-                if (end - position >= 5 && _fileData.AsSpan(position, 5).SequenceEqual(new byte[] { 0x80, 0x01, 0x85, 0, 0 }))
-                {
+                // Every file entry consists of a zero byte, a single value record and a terminating zero byte. The
+                // value record either carries the window ordinal explicitly (0x81 01 <ordinal> 80) or is the short
+                // form of the entry of the window with ordinal 0 (0x85). Other window types, a notes window for
+                // example, use a value record whose meaning is not known; their entries are recognized so that the
+                // following entries and sub folders stay readable, but they contribute no assignment.
+                // The byte behind the last entry is the number of sub folders.
+                if (end - position < 4 || _fileData[position] != 0 || _fileData[position + 1] != 0x80)
+                    return false;
+                int valueLength = _fileData[position + 2];
+                if (valueLength < 1 || end - position < 4 + valueLength || _fileData[position + 3 + valueLength] != 0)
+                    return false;
+                var value = _fileData.AsSpan(position + 3, valueLength);
+                int ordinal = -1;
+                if (valueLength == 1 && value[0] == 0x85)
                     ordinal = 0;
-                    position += 5;
-                }
-                else if (end - position >= 7 && _fileData.AsSpan(position, 4).SequenceEqual(new byte[] { 0x80, 0x04, 0x81, 0x01 }) &&
-                    _fileData[position + 5] == 0x80 && _fileData[position + 6] == 0)
-                {
-                    ordinal = _fileData[position + 4];
-                    position += 7;
-                }
-                else
+                else if (valueLength == 4 && value[0] == 0x81 && value[1] == 0x01 && value[3] == 0x80)
+                    ordinal = value[2];
+                if (ordinal >= 0 && (ordinal >= windowCount || !assignments.TryAdd(ordinal, path)))
                     return false;
-                if (ordinal >= windowCount || !assignments.TryAdd(ordinal, path))
-                    return false;
+                position += 4 + valueLength;
             }
             if (position >= end || (_fileData[position] & 1) != 0)
                 return false;
@@ -613,6 +673,52 @@ namespace Altaxo.Serialization.Origin
                 if (!TryReadFolder(ref position, end, path, false, depth + 1, assignments, windowCount))
                     return false;
             return true;
+        }
+
+        /// <summary>
+        /// Adds a book for every window that describes a worksheet without a single column.
+        /// </summary>
+        /// <param name="books">The books that were derived from the dataset names of their columns.</param>
+        /// <returns>The given books followed by one book per column-less worksheet window.</returns>
+        /// <remarks>
+        /// A book is normally derived from the dataset names of its columns, so a worksheet without columns has no
+        /// book at all. Such a book is created from its window candidate, but only when the window area contains a
+        /// complete, numbered sequence of sheet names whose column count is zero, because that signature is only
+        /// produced by an empty worksheet sheet.
+        /// </remarks>
+        private IReadOnlyList<Book> AddWindowOnlyBooks(IReadOnlyList<Book> books)
+        {
+            var windows = FindWindowCandidates();
+            var result = new List<Book>(books);
+            for (int w = 0; w < windows.Count; ++w)
+            {
+                bool hasBook = false;
+                foreach (var book in result)
+                    hasBook |= book.Name == windows[w].Name;
+                if (hasBook)
+                    continue;
+
+                int end = w + 1 < windows.Count ? windows[w + 1].Index : Records.Count;
+                var sheets = new List<Sheet>();
+                bool isColumnlessWorksheet = false;
+                for (int i = windows[w].Index + 1; i < end; ++i)
+                {
+                    if (!TryReadWorksheetSheetName(i, out _, out int number, out int columns))
+                        continue;
+                    // Any sheet with columns belongs to a book that the dataset names already resolved.
+                    if (columns != 0 || number != sheets.Count + 1)
+                    {
+                        isColumnlessWorksheet = false;
+                        break;
+                    }
+                    sheets.Add(new Sheet(number, null, []));
+                    isColumnlessWorksheet = true;
+                }
+
+                if (isColumnlessWorksheet)
+                    result.Add(new Book(windows[w].Name, null, sheets));
+            }
+            return result;
         }
 
         /// <summary>
@@ -1550,11 +1656,16 @@ namespace Altaxo.Serialization.Origin
             int blockLength = position - dataOffset;
             if (!ReadBytes(4, out var trailer))
                 return false;
-            // The block ends with 02 01 00 0A, or with a longer run of zero bytes closed by 0A 00 80 77.
+            // The block ends with 02 01 00 0A, or with a longer run of zero bytes closed by 0A 00 in front of the
+            // window description of the sheet. That window description is a record of its own, so its bytes are
+            // verified against the project bytes instead of being read as a part of the value block.
             if (!trailer.AsSpan().SequenceEqual(new byte[] { 0x02, 0x01, 0x00, 0x0a }))
             {
+                ReadOnlySpan<byte> blockEnd = [0, 0, 0, 0, 0, 0x0a, 0];
                 if (!trailer.AsSpan().SequenceEqual(new byte[] { 0, 0, 0, 0 }) ||
-                    !ReadBytes(9, out var rest) || !rest.AsSpan().SequenceEqual(new byte[] { 0, 0, 0, 0, 0, 0x0a, 0, 0x80, 0x77 }))
+                    position + blockEnd.Length + 1 > _fileData.Length ||
+                    !_fileData.AsSpan(position, blockEnd.Length).SequenceEqual(blockEnd) ||
+                    _fileData[position + blockEnd.Length] is < 0x80 or > 0x9f)
                     return false;
             }
             if (!TryCopyRecordBytes(startIndex, dataOffset, blockLength, out encodedData))
@@ -2089,7 +2200,7 @@ namespace Altaxo.Serialization.Origin
                     continue;
                 }
                 var scanEnd = low < _records.Count ? _records[low].Offset : data.Length;
-                if (TryReadTLVRecord(data, position, 0x60, out var record) && record.NextOffset <= scanEnd) // to be proven: is 0x60 really the maximum length of a record? The engineering spec says 0x7f, but that would be a problem for resynchronization.
+                if (TryReadTLVRecord(data, position, MaxTLVLength, out var record) && record.NextOffset <= scanEnd) // to be proven: is 0x60 really the maximum length of a plain record? The engineering spec says 0x7f, but that would be a problem for resynchronization. Longer records are handled as window descriptions.
                 {
                     // test if the new record is the preview image table record
                     if (record.Payload.Length == 0x0A &&
@@ -2098,9 +2209,12 @@ namespace Altaxo.Serialization.Origin
                         // the length of the record is 0x0A, but it is 6 bytes more, so make a new TLVRecord with the correct length
                         AddRecord(new TLVRecord(record.Offset, record.Tag, new ReadOnlyMemory<byte>(data, record.Offset + 2, 0x10)));
 
-                        // get the index into the preview image table
+                        // get the index into the preview image table. A project without any preview image (e.g. a project
+                        // that only holds note windows) stores a null pointer here, and there is neither an image table
+                        // nor any PNG data in the file.
                         var previewImageTableOffset = (int)BinaryPrimitives.ReadInt64LittleEndian(data.AsSpan().Slice(position + 2 + prvwOPJUmarker.Length, 8));
-                        FindIndexedPngs(data, previewImageTableOffset, BodyOffset);
+                        if (previewImageTableOffset != 0)
+                            FindIndexedPngs(data, previewImageTableOffset, BodyOffset);
                         position = 6 + record.NextOffset; // length was off by 2 bytes, so we need to add 6 instead of 8
                         if (TryReadLengthPrefixedBlock(data, position, 0x60, out var rec))
                         {
@@ -2124,12 +2238,36 @@ namespace Altaxo.Serialization.Origin
                     continue;
                 }
 
+                // A window description declares a length above the limit of the plain candidate scan, so it has to
+                // be recognized separately.
+                if (TryReadWindowRecord(data, position, scanEnd, out var windowRecord))
+                {
+                    AddRecord(windowRecord);
+                    position = windowRecord.NextOffset;
+                    continue;
+                }
+
                 // Preserve unrecognized bytes until four consecutive candidates permit resynchronization,
-                // or until the next indexed image boundary is reached.
+                // the start of a window description, or the next indexed image boundary is reached.
                 int gapStart = position++;
-                while (position < scanEnd && !HasFourConsecutiveTLVRecords(data, position, scanEnd))
+                bool windowStartsHere = false;
+                while (position < scanEnd)
+                {
+                    if (HasFourConsecutiveTLVRecords(data, position, scanEnd))
+                        break;
+                    if (TryReadWindowRecord(data, position, scanEnd, out windowRecord))
+                    {
+                        windowStartsHere = true;
+                        break;
+                    }
                     ++position;
+                }
                 AddRecord(new UnknownRegionRecord(gapStart, position - gapStart, new ReadOnlyMemory<byte>(data, gapStart, position - gapStart)));
+                if (windowStartsHere)
+                {
+                    AddRecord(windowRecord);
+                    position = windowRecord.NextOffset;
+                }
             }
             return _records.AsReadOnly();
         }
@@ -2148,7 +2286,7 @@ namespace Altaxo.Serialization.Origin
             datasetOffset = -1;
             for (int offset = candidateOffset + 2; offset <= candidateEnd - 3; ++offset)
             {
-                if (!TryReadTLVRecord(data, offset, 0x60, out var width) || width.Tag != 0x85 ||
+                if (!TryReadTLVRecord(data, offset, MaxTLVLength, out var width) || width.Tag != 0x85 ||
                     width.Payload.Length != 1 || width.Payload.Span[0] is not (1 or 2 or 4 or 8 or 10 or 16 or 50) ||
                     width.NextOffset != candidateEnd || !HasWorksheetDatasetHeader(data, width.NextOffset))
                     continue;
@@ -2385,12 +2523,30 @@ namespace Altaxo.Serialization.Origin
         {
             candidate = null;
             number = columns = 0;
-            if (index < 2 || index + 2 >= Records.Count ||
-                Records[index] is not TLVRecord columnCount || columnCount.Tag != 0x89 || columnCount.Payload.Length != 1 ||
+            if (index < 2 || index + 1 >= Records.Count ||
                 Records[index - 1] is not TLVRecord numeric || numeric.Tag != 0x88 || numeric.Payload.Length != 8 ||
-                Records[index - 2] is not TLVRecord ordinalMarker || ordinalMarker.Payload.Length != 1 ||
-                Records[index + 1] is not TLVRecord marker || marker.Tag != 0x80 ||
-                !marker.Payload.Span.SequenceEqual(new byte[] { 0xf7 }))
+                Records[index - 2] is not TLVRecord ordinalMarker || ordinalMarker.Payload.Length != 1)
+                return false;
+
+            // A sheet with columns announces its column count in a 0x89 record followed by a 0x80 record holding the
+            // marker 0xf7. A sheet without columns merges both records into a single 0x8d record holding that marker.
+            int nameIndex;
+            int nameOffset;
+            if (Records[index] is TLVRecord columnCount && columnCount.Tag == 0x89 && columnCount.Payload.Length == 1 &&
+                Records[index + 1] is TLVRecord marker && marker.Tag == 0x80 &&
+                marker.Payload.Span.SequenceEqual(new byte[] { 0xf7 }))
+            {
+                columns = columnCount.Payload.Span[0];
+                nameIndex = index + 2;
+                nameOffset = marker.NextOffset;
+            }
+            else if (Records[index] is TLVRecord emptySheet && emptySheet.Tag == 0x8d &&
+                emptySheet.Payload.Span.SequenceEqual(new byte[] { 0xf7 }))
+            {
+                nameIndex = index + 1;
+                nameOffset = emptySheet.NextOffset;
+            }
+            else
                 return false;
             if (ordinalMarker.Tag == 0x84 && ordinalMarker.Payload.Span[0] == 7)
                 number = 1;
@@ -2404,16 +2560,34 @@ namespace Altaxo.Serialization.Origin
                 if (Records[i].NextOffset != Records[i + 1].Offset)
                     return false;
 
-            int offset = marker.NextOffset;
-            if (!TryCopyRecordBytes(index + 2, offset, 10, out var header) ||
-                !header.AsSpan(0, 9).SequenceEqual(new byte[] { 0xc0, 0xff, 0x8e, 0x04, 0xff, 0x01, 0, 0x04, 0xa4 }) ||
-                header[9] == 0 || !TryCopyRecordBytes(index + 2, offset, 14 + header[9], out var encoded) ||
-                !encoded.AsSpan(10 + header[9], 4).SequenceEqual(new byte[] { 0x0a, 0, 0x10, 1 }))
+            // The name block behind the marker starts with c0 ff followed by a 0x8e record and a record holding the
+            // name. Two layouts are observed: the 0x8e record either carries two additional bytes and introduces a
+            // 0xa4 record (c0 ff 8e 04 ff 01 00 04 a4 <len> <name> 0a 00 10 01), or it is short and introduces a
+            // 0xa6 record (c0 ff 8e 02 ff 01 a6 <len> <name> 0a 00 10 01). Therefore only the framing is matched and
+            // both records are parsed.
+            int offset = nameOffset;
+            if (!TryCopyRecordBytes(nameIndex, offset, 4, out var header) ||
+                !header.AsSpan(0, 3).SequenceEqual(new byte[] { 0xc0, 0xff, 0x8e }) ||
+                header[3] < 2 || header[3] > 8)
+                return false;
+
+            // Index of the tag byte of the name record, relative to the start of the name block.
+            int nameTag = 4 + header[3];
+            if (!TryCopyRecordBytes(nameIndex, offset, nameTag + 2, out var framing) ||
+                !framing.AsSpan(4, 2).SequenceEqual(new byte[] { 0xff, 0x01 }) ||
+                (framing[nameTag] != 0xa4 && framing[nameTag] != 0xa6) ||
+                framing[nameTag + 1] == 0)
+                return false;
+
+            int nameStart = nameTag + 2;
+            int nameLength = framing[nameTag + 1];
+            if (!TryCopyRecordBytes(nameIndex, offset, nameStart + nameLength + 4, out var encoded) ||
+                !encoded.AsSpan(nameStart + nameLength, 4).SequenceEqual(new byte[] { 0x0a, 0, 0x10, 1 }))
                 return false;
             string name;
             try
             {
-                name = new UTF8Encoding(false, true).GetString(encoded, 10, header[9]);
+                name = new UTF8Encoding(false, true).GetString(encoded, nameStart, nameLength);
             }
             catch (DecoderFallbackException)
             {
@@ -2424,8 +2598,7 @@ namespace Altaxo.Serialization.Origin
             foreach (char character in name)
                 if (char.IsControl(character))
                     return false;
-            columns = columnCount.Payload.Span[0];
-            candidate = new SheetNameCandidate(offset + 10, name);
+            candidate = new SheetNameCandidate(offset + nameStart, name);
             return true;
         }
 
@@ -2579,8 +2752,18 @@ namespace Altaxo.Serialization.Origin
         private List<(int Index, string Name)> FindWindowCandidates()
         {
             var windows = new List<(int Index, string Name)>();
-            for (int i = 0; i + 2 < Records.Count; ++i)
+            for (int i = 0; i < Records.Count; ++i)
             {
+                // A window description names its window by itself; its child records belong to that record.
+                if (Records[i] is WindowRecord window)
+                {
+                    windows.Add((i, window.Name));
+                    continue;
+                }
+
+                if (i + 2 >= Records.Count)
+                    continue;
+
                 if (Records[i + 1] is TLVRecord geometry &&
                     Records[i + 2] is TLVRecord marker && marker.Payload.Length == 5 &&
                     (geometry.Payload.Length == 12 && marker.Tag == 0x84 ||
@@ -2715,6 +2898,56 @@ namespace Altaxo.Serialization.Origin
         }
 
         /// <summary>
+        /// Tries to read a window description record at the given offset.
+        /// </summary>
+        /// <param name="data">The complete project bytes.</param>
+        /// <param name="offset">The offset of the tag to interpret.</param>
+        /// <param name="endOffset">The exclusive end of the area available for scanning.</param>
+        /// <param name="record">The window description, if the observed framing matches.</param>
+        /// <returns><see langword="true"/> if a window description was recognized.</returns>
+        /// <remarks>
+        /// Only lengths that the plain candidate scan rejects (above its limit) can be window descriptions, so this
+        /// recognition cannot change any record that is already parsed today. The payload must consist of a name
+        /// field <c>&lt;length&gt; 00 00 &lt;name&gt;</c>, a run of at least four child records, and a short trailing block.
+        /// </remarks>
+        private static bool TryReadWindowRecord(byte[] data, int offset, int endOffset, [NotNullWhen(true)] out WindowRecord? record)
+        {
+            record = null;
+            if (offset >= data.Length - 1 || data[offset] < 0x80 || data[offset] > 0x9f)
+                return false;
+            int length = data[offset + 1];
+            if (length <= MaxTLVLength || length > 0x7f || offset + 2 + length > Math.Min(endOffset, data.Length))
+                return false;
+
+            // The name field is <field length> 00 00 <name>, where the field length counts its own two zero bytes.
+            var payload = new ReadOnlyMemory<byte>(data, offset + 2, length);
+            var span = payload.Span;
+            int nameLength = span[0] - 2;
+            if (span[0] < 3 || span[1] != 0 || span[2] != 0 || nameLength > length - 3)
+                return false;
+            var nameBytes = span.Slice(3, nameLength);
+            foreach (var b in nameBytes)
+                if (b < 0x20 || b >= 0x7f)
+                    return false;
+
+            // The child records follow the name field. Their run ends at the first byte that is not a candidate tag,
+            // which is the beginning of the trailing block.
+            int payloadEnd = offset + 2 + length;
+            var children = new List<TLVRecord>();
+            int position = 3 + nameLength;
+            while (TryReadTLVRecord(data, offset + 2 + position, MaxTLVLength, out var child) && child.NextOffset <= payloadEnd)
+            {
+                children.Add(child);
+                position = child.NextOffset - (offset + 2);
+            }
+            if (children.Count < 4 || length - position is < 1 or > 32)
+                return false;
+
+            record = new WindowRecord(offset, data[offset], payload, Encoding.ASCII.GetString(nameBytes), children.AsReadOnly());
+            return true;
+        }
+
+        /// <summary>
         /// Checks if there is a run of at least four consecutive TLV records starting at the given offset. This is used to resynchronize after an unknown region.
         /// </summary>
         /// <param name="data">The data to check.</param>
@@ -2725,7 +2958,7 @@ namespace Altaxo.Serialization.Origin
         {
             for (int i = 0; i < 4; ++i)
             {
-                if (!TryReadTLVRecord(data, offset, 0x60, out var record) || record.NextOffset > endOffset)
+                if (!TryReadTLVRecord(data, offset, MaxTLVLength, out var record) || record.NextOffset > endOffset)
                     return false;
                 offset = record.NextOffset;
             }

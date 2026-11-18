@@ -18,12 +18,22 @@ Column A contains the following values:
 | 7   | 06.06.1966 06:06:06 |
 | 8   | 16.08.1948 12:12:48 |
 
+With German locale (de-de), now the values are formatted so:
+
+| Row | A          |
+| -   | -          |
+| 0   | 23.08.1971 |
+| 1   | 04.05.1908 |
+| 2   | 09.09.1999 |
+| 3   | 01.03.1980 |
+| 4   | 25.04.1956 |
+| 5   | 01.08.2031 |
+| 6   | 09.09.1845 |
+| 7   | 06.06.1966 |
+| 8   | 16.08.1948 |
+
 
 
 Changes with respect to the reference file OneBookOneSheetOneDateColumn_DDMMYYYY_HH_MM_SS.opju:
 - changed ValueTypeSpecification of column 'A' to 'Date_DD_MM_YYYY'.
-
-
-
-
 

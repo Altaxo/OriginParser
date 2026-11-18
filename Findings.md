@@ -231,3 +231,157 @@ Similarly, `OneBookOneSheetOneDateColumn_Row0To8.opju` starts with literal bytes
 1.287 milliseconds. These differences are already present in the expected decimal literals,
 not introduced by decompression. For precise regression checks, derive expected values from
 the documented calendar dates rather than copying rounded decimal day counts.
+
+---
+
+## Window description records (records that contain child records)
+
+**Where:** one record per top-level window. In `SysVariations/NumberOfWindows/OneEmptyWorksheet.opju`
+the worksheet window `Biro` starts at `0xEC` with `80 76`, i.e. tag `0x80` and length `0x76` (118).
+
+**Shape:** the payload is a name field, a run of child `TLV` records and a short trailing area:
+
+```
+80 76 | 06 00 00 42 69 72 6F | 92 0C ... 81 08 ... | C1 FF 05 3C 03 00 00 11 80 01 FC ...
+^  ^    ^  --  --  --- name ---  -- 8 child records --  ^ trailing area, starts with a
+|  |    |  |     |                                        non-TLV byte
+|  |    |  |     +-- the name bytes (4 = field length - 2)
+|  |    |  +-------- two zero bytes
+|  |    +---------- field length, counting its own two zero bytes
+|  +--------------- payload length 0x76, above the limit of the plain candidate scan
++------------------ tag 0x80..0x9F
+```
+
+The child run ends at the first byte that is not a candidate tag. Every window of the
+`NumberOfWindows` fixture folder — worksheet, matrix and graph alike — has eight child records and a
+declared length of `114 + length of the window name` (`80 76` for `Biro`, `80 77` for `Quark`, `80 78`
+for `Annika`), so the length byte is always above `0x60`.
+
+**Important:** the plain candidate scan rejects lengths above `MaxTLVLength` (`0x60`), so these
+records used to be swallowed into an unknown region and the window name was invisible. Because only
+lengths that the plain scan rejects can be window descriptions, recognizing them cannot change any
+record that was parsed before.
+
+**Parser:** `TryReadWindowRecord` accepts a tag `0x80`..`0x9F` with length `0x61`..`0x7F` whose
+payload is `<field length> 00 00 <printable ASCII name>`, followed by at least four child records and
+1..32 trailing bytes. `ParseIntoRecords` calls it when the plain `TLV` attempt fails, and the start of
+a window record is a resynchronization point for gap loops. The child records are *nested*: they are
+available through `WindowRecord.Children`, not as top-level entries of `Records`, so passes that scan
+`Records` cannot see them.
+
+---
+
+## Long name and comment of a window
+
+**Where:** the marker `80 01 FC C0 FF 02 00 39 8C 01 48 8B 04 FF 7F 00 00` sits in the trailing area
+of the window description, *inside* the declared length (`0x154` for `Biro`). The length byte that
+follows the marker is the first byte *behind* the record (`2D` at `0x164`), so the text block
+straddles the record boundary.
+
+**Shape:** `<length> <long name>\r\n<comment>` terminated by `00 0A`. For `Biro`, `2D` = 45 bytes
+hold `Ächt\r\nThis is the first window, a worksheet\0`. A window without a comment has no line break.
+
+**Parser:** `ApplyWorksheetBookMetadata` searches the area of a window (up to the next window
+candidate or the next indexed preview image) for that marker. A book receives the metadata only when
+its name occurs exactly once among the books and once among the windows, and when the area contains
+exactly one decodable long name.
+
+---
+
+## Sheet name marker of a sheet without columns
+
+**Where:** in the sheet description of a worksheet. A sheet *with* columns announces its column count
+in `89 01 <columns>` followed by `80 01 F7`; a sheet *without* columns merges both records into the
+single record `8D 01 F7`. Both markers are directly followed by the sheet name block.
+
+**Shape of the name block:** `C0 FF` plus an `8E` record plus a record holding the name, closed by
+`0A 00 10 01`. Two framings occur (of 227 raw marker sites in the corpus, 225 use the usual framing,
+one uses the short framing, and one is a coincidental byte sequence inside a graph window):
+
+```
+usual:  C0 FF 8E 04 FF 01 00 04 A4 <len> <name> 0A 00 10 01     (226 sites)
+short:  C0 FF 8E 02 FF 01          A6 <len> <name> 0A 00 10 01  (Quark in
+                                                       OneEmptyWorksheet_OneMatrixOneWorksheet.opju)
+```
+
+**Parser:** `TryReadWorksheetSheetName` accepts both sheet markers and parses the framing instead of
+matching nine fixed bytes: the `8E` record length selects the tag byte of the name record, and the
+name record tag may be `0xA4` or `0xA6`. `AddWindowOnlyBooks` creates a book for a window only when
+the window area holds a complete, numbered sequence of such sheet names whose column count is zero,
+which is the only way a column-less worksheet becomes visible at all: books are otherwise derived
+from the dataset names (`Book1_A`) of their columns.
+
+---
+
+## Project tree: folder entries and their file entries
+
+**Where:** the project explorer tree block starts after the last indexed preview image, introduced by
+the marker `80 06 04 DE 36 10 03 89` with a preceding little-endian `uint32` native length. It is the
+only place that stores the folder of a window.
+
+**Shape of a folder entry:** `80 <header length>` `TLV` whose payload begins with a variable type
+prefix (`01 04 8C 10`, `03 00 00 01 8A 10` or `8D 10`) followed by the parent GUID and the folder's
+own GUID; then `00`, `uint32` name length, `0A`, the NUL-terminated name, the folder marker
+`0A 04 07 01 47 C0 11 01 01 9C 0A`, a `<properties length>` block that must be followed by `0A`, and
+the entries marker `04 A1 01 64 80 0A 02 75 62 0A`.
+
+**File entries:** the byte behind the entries marker is `fileCount / 2`, then `fileCount` entries,
+then `folderCount / 2` and the sub folders. Every entry has the same framing — a zero byte, one value
+record, a terminating zero byte — while the value differs:
+
+| Value record | Meaning |
+|---|---|
+| `80 01 85` | The window with ordinal 0 (short form). |
+| `80 04 81 01 <ordinal> 80` | The window with the given ordinal. |
+| `80 05 03 00 00 10 82` | Unknown; observed once, in the folder of a *notes* window. |
+
+The ordinals refer to the window candidates of `FindWindowCandidates` in file order.
+
+**Parser:** `TryReadFolder` parses the generic entry framing so that an entry of unknown form is
+skipped rather than rejecting the whole tree — only entries of the two known forms contribute an
+ordinal. The tree is accepted only when it parses without leftovers and assigns every window candidate
+exactly once; `ApplyWorksheetFolders` then still applies a path only to a book whose name is unique
+among books and windows.
+
+---
+
+## Notes windows use a different description
+
+`OneEmptyWorksheet_OneNote.opju` holds the notes window `Lenja` at `0x22B4`, starting with `80 43`
+(length 67). Its payload does *not* start with `<field length> 00 00 <name>`; the name sits inside the
+child record `93 06 "Lenja"`, which overflows the declared length (comparable to the known
+`PrvwOPJU` short-length special case). Behind the record follows `68` (104) and then
+`Kassel\r\n<comment>\n<note content>\0`. Notes windows are therefore not recognized as window
+candidates and not modeled as books; only the tree entry form above was generalized, because a single
+fixture does not establish the notes layout.
+
+---
+
+## The preview image table pointer can be null
+
+**Where:** the payload of the `PrvwOPJU` record, behind the eight marker bytes.
+
+**Shape:** the marker record is `81 0A` followed by `PrvwOPJU` and an 8-byte little-endian offset of the
+preview image table, so its declared length `0x0A` is six bytes short of the 16-byte payload. In
+`OneNote.opju` and `TwoNotes.opju` those eight bytes are all zero: the project contains no preview image
+at all, therefore it has neither an image table nor a single `89 50 4E 47` PNG signature anywhere. Both
+files hold only notes windows, which matches the observation that every fixture with a preview image
+contains at least one worksheet, matrix or graph window.
+
+**Parser:** `ParseIntoRecords` only calls `FindIndexedPngs` when the pointer is non-zero. A zero pointer is
+a missing image table, not a truncated one, so it must not be reported as an invalid table; scanning simply
+continues behind the marker record.
+
+---
+
+## End of a text column value block
+
+**Where:** behind the last string of the value block of a text column.
+
+**Shape:** the block ends with `02 01 00 0A`, or with a longer run of zero bytes closed by `0A 00`
+directly in front of the window description of the sheet. That window description is a record of its
+own, so its bytes must not be read as part of the value block.
+
+**Parser:** `TryDecodeTextDataset` verifies the seven bytes `00 00 00 00 00 0A 00` plus a following
+candidate tag (`0x80`..`0x9F`) against the raw project bytes instead of reading them through the
+records of the block.

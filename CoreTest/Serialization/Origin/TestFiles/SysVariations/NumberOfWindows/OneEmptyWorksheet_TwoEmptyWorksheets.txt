@@ -1,0 +1,15 @@
+Content of the Origin file
+
+The first window is a Worksheet with Name='Biro', Longname='Ächt' and Comment='This is the worksheet window B_i_r_o'. Worksheet 'Biro' is located in the folder 'München'. Inside of 'Biro' is a sheet 'Kübel'.
+The sheet's dimensions are 14 rows x 0 columns. So it has no content.
+
+The second window is a Worksheet with Name='Mira', Longname='Lübeck' and Comment='This is the worksheet window M_i_r_a'. Worksheet 'Mira' is located in the folder 'München\Jürgen'. Inside of Worksheet 'Mira' is a sheet 'Göttingen'.
+The sheet's dimensions are 37 rows x 0 columns. So it has no content.
+
+The third window is a Worksheet with Name='Annika', Longname='Zürich' and Comment='This is the worksheet window A_n_n_i_k_a'. Worksheet 'Annika' is located in the folder 'München\Jürgen\Henrik'. Inside of Worksheet 'Annika' is a sheet 'Bergen'.
+The sheet's dimensions are 97 rows x 0 columns. So it has no content.
+
+
+Changes with respect to the reference file 'OneEmptyWorksheet.opju':
+- added worksheet 'Mira' with the properties described above
+- added worksheet 'Annika' with the properties described above

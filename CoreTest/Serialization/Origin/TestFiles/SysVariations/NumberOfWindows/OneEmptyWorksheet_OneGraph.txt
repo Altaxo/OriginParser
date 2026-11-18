@@ -1,0 +1,9 @@
+Content of the Origin file
+
+The first window is a Worksheet with Name='Biro', Longname='Ächt' and Comment='This is the worksheet window B_i_r_o'. Worksheet 'Biro' is located in the folder 'München'. Inside of 'Biro' is a sheet 'Kübel'.
+The sheet's dimensions are 14 rows x 0 columns. So it has no content.
+
+The second window is a Graph with Name='Valencia', Longname='Tromsø' and Comment='This is the graph window V_a_l_e_n_c_i_a'. Graph 'Valencia' is located in the folder 'München\Östen'.
+
+Changes with respect to the reference file 'OneEmptyWorksheet.opju':
+- added graph 'Valencia' with the properties described above
