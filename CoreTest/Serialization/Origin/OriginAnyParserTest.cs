@@ -205,8 +205,8 @@ namespace Altaxo.Serialization.Origin.Tests
       Assert.Equal(1, c.EndRow);
       Assert.Equal(new TimeSpan(12, 34, 00), RoundToSecond(c.Data[0].AsTimeSpan().Value, 1));
       Assert.Empty(c.LongName);
-      Assert.Empty(c.Units);
-      Assert.Equal("Zeit HH:mm", c.Comments);
+      Assert.Empty(c.Unit);
+      Assert.Equal("Zeit HH:mm", c.Comment);
 
       c = spreadSheet.Columns[1];
       Assert.Equal(ValueType.Date, c.ValueType);
@@ -215,8 +215,8 @@ namespace Altaxo.Serialization.Origin.Tests
       Assert.Equal(1, c.EndRow);
       Assert.Equal(new DateTime(2031, 6, 27, 14, 19, 0), RoundToSecond(c.Data[0].AsDateTime().Value, 1));
       Assert.Empty(c.LongName);
-      Assert.Empty(c.Units);
-      Assert.Equal("Date MM/DD/YYYY HH:mm", c.Comments);
+      Assert.Empty(c.Unit);
+      Assert.Equal("Date MM/DD/YYYY HH:mm", c.Comment);
 
       c = spreadSheet.Columns[2];
       Assert.Equal(ValueType.Month, c.ValueType);
@@ -225,8 +225,8 @@ namespace Altaxo.Serialization.Origin.Tests
       Assert.Equal(1, c.EndRow);
       Assert.Equal(3, c.Data[0].AsDouble());
       Assert.Empty(c.LongName);
-      Assert.Empty(c.Units);
-      Assert.Equal("Month", c.Comments);
+      Assert.Empty(c.Unit);
+      Assert.Equal("Month", c.Comment);
       Assert.Equal(3, c.Data[0].AsDouble());
 
       c = spreadSheet.Columns[3];
@@ -236,8 +236,8 @@ namespace Altaxo.Serialization.Origin.Tests
       Assert.Equal(1, c.EndRow);
       Assert.Equal(5, c.Data[0].AsDouble());
       Assert.Empty(c.LongName);
-      Assert.Empty(c.Units);
-      Assert.Equal("DayOfWeek\nMon", c.Comments);
+      Assert.Empty(c.Unit);
+      Assert.Equal("DayOfWeek\nMon", c.Comment);
       Assert.Equal(5, c.Data[0].AsDouble());
     }
 
@@ -373,8 +373,8 @@ namespace Altaxo.Serialization.Origin.Tests
       Assert.Equal(2, c.Data[1].AsDouble());
       Assert.Equal(3, c.Data[2].AsDouble());
       Assert.Equal("Leitfähigkeit", c.LongName);
-      Assert.Equal("S", c.Units);
-      Assert.Empty(c.Comments);
+      Assert.Equal("S", c.Unit);
+      Assert.Empty(c.Comment);
 
       c = spreadSheet.Columns[1];
       Assert.Equal(ValueType.TextNumeric, c.ValueType);
@@ -384,8 +384,8 @@ namespace Altaxo.Serialization.Origin.Tests
       Assert.Equal(5, c.Data[1].AsDouble());
       Assert.Equal(6, c.Data[2].AsDouble());
       Assert.Equal("Temperatur", c.LongName);
-      Assert.Equal("°C", c.Units);
-      Assert.Empty(c.Comments);
+      Assert.Equal("°C", c.Unit);
+      Assert.Empty(c.Comment);
     }
 
     [Fact]
@@ -458,8 +458,8 @@ namespace Altaxo.Serialization.Origin.Tests
       Assert.Equal(2, c.Data[1].AsDouble());
       Assert.Equal(3, c.Data[2].AsDouble());
       Assert.Empty(c.LongName);
-      Assert.Empty(c.Units);
-      Assert.Empty(c.Comments);
+      Assert.Empty(c.Unit);
+      Assert.Empty(c.Comment);
 
       c = spreadSheet.Columns[1];
       Assert.Equal("B", c.Name);
@@ -469,8 +469,8 @@ namespace Altaxo.Serialization.Origin.Tests
       Assert.Equal(5, c.Data[1].AsDouble());
       Assert.Equal(6, c.Data[2].AsDouble());
       Assert.Empty(c.LongName);
-      Assert.Empty(c.Units);
-      Assert.Empty(c.Comments);
+      Assert.Empty(c.Unit);
+      Assert.Empty(c.Comment);
 
       spreadSheet = excel.Sheets[1];
       Assert.Equal(2, spreadSheet.Columns.Count);
@@ -490,8 +490,8 @@ namespace Altaxo.Serialization.Origin.Tests
       Assert.Equal(8, c.Data[5 - c.BeginRow].AsDouble());
       Assert.Equal(9, c.Data[6 - c.BeginRow].AsDouble());
       Assert.Empty(c.LongName);
-      Assert.Empty(c.Units);
-      Assert.Empty(c.Comments);
+      Assert.Empty(c.Unit);
+      Assert.Empty(c.Comment);
 
       c = spreadSheet.Columns[1];
       Assert.Equal("B", c.Name);
@@ -507,8 +507,8 @@ namespace Altaxo.Serialization.Origin.Tests
       Assert.Equal(11, c.Data[5 - c.BeginRow].AsDouble());
       Assert.Equal(12, c.Data[6 - c.BeginRow].AsDouble());
       Assert.Empty(c.LongName);
-      Assert.Empty(c.Units);
-      Assert.Empty(c.Comments);
+      Assert.Empty(c.Unit);
+      Assert.Empty(c.Comment);
     }
 
     [Fact]
@@ -535,7 +535,7 @@ namespace Altaxo.Serialization.Origin.Tests
         Assert.Equal(1, c.Data[0].AsDouble());
         Assert.Equal(3, c.Data[2].AsDouble());
         Assert.Empty(c.LongName);
-        Assert.Empty(c.Units);
+        Assert.Empty(c.Unit);
 
 
         var expectedComment = ic switch
@@ -551,7 +551,7 @@ namespace Altaxo.Serialization.Origin.Tests
           8 => "Complex",
           _ => throw new NotImplementedException(),
         };
-        Assert.Equal(expectedComment, c.Comments);
+        Assert.Equal(expectedComment, c.Comment);
 
 
         if (ic == 0 || ic == 8)
@@ -591,8 +591,8 @@ namespace Altaxo.Serialization.Origin.Tests
       Assert.Equal(2, c.Data[1].AsDouble());
       Assert.Equal(3, c.Data[2].AsDouble());
       Assert.Equal("Leitfähigkeit", c.LongName);
-      Assert.Equal("S", c.Units);
-      Assert.Empty(c.Comments);
+      Assert.Equal("S", c.Unit);
+      Assert.Empty(c.Comment);
 
       c = spreadSheet.Columns[1];
       Assert.Equal(0, c.BeginRow);
@@ -601,8 +601,8 @@ namespace Altaxo.Serialization.Origin.Tests
       Assert.Equal(5, c.Data[1].AsDouble());
       Assert.Equal(6, c.Data[2].AsDouble());
       Assert.Equal("Temperatur", c.LongName);
-      Assert.Equal("°C", c.Units);
-      Assert.Empty(c.Comments);
+      Assert.Equal("°C", c.Unit);
+      Assert.Empty(c.Comment);
 
       spreadSheet = reader.SpreadSheets[1];
       Assert.Equal("Book2", spreadSheet.Name);
@@ -615,8 +615,8 @@ namespace Altaxo.Serialization.Origin.Tests
       Assert.Equal("2,2", c.Data[1].AsString());
       Assert.Equal("3,3", c.Data[2].AsString());
       Assert.Equal("LN1", c.LongName);
-      Assert.Equal("Siemens", c.Units);
-      Assert.Equal("Kommentar1", c.Comments);
+      Assert.Equal("Siemens", c.Unit);
+      Assert.Equal("Kommentar1", c.Comment);
 
       c = spreadSheet.Columns[1];
       Assert.Equal(0, c.BeginRow);
@@ -625,8 +625,8 @@ namespace Altaxo.Serialization.Origin.Tests
       Assert.Equal(5.5, c.Data[1].AsDouble());
       Assert.Equal("6,6", c.Data[2].AsString());
       Assert.Equal("LN2", c.LongName);
-      Assert.Equal("°C", c.Units);
-      Assert.Equal("Kommentar2", c.Comments);
+      Assert.Equal("°C", c.Unit);
+      Assert.Equal("Kommentar2", c.Comment);
     }
 
     [Fact]
@@ -649,8 +649,8 @@ namespace Altaxo.Serialization.Origin.Tests
       Assert.Equal(0, c.BeginRow);
       Assert.Equal(2, c.EndRow);
       Assert.Empty(c.LongName);
-      Assert.Empty(c.Units);
-      Assert.Equal("T&N", c.Comments);
+      Assert.Empty(c.Unit);
+      Assert.Equal("T&N", c.Comment);
       Assert.Equal(1, c.Data[0].AsDouble());
       Assert.Equal("Text", c.Data[1].AsString());
 
@@ -659,8 +659,8 @@ namespace Altaxo.Serialization.Origin.Tests
       Assert.Equal(0, c.BeginRow);
       Assert.Equal(2, c.EndRow);
       Assert.Empty(c.LongName);
-      Assert.Empty(c.Units);
-      Assert.Equal("T&N", c.Comments);
+      Assert.Empty(c.Unit);
+      Assert.Equal("T&N", c.Comment);
       Assert.Equal(1, c.Data[0].AsDouble());
       Assert.Equal(2, c.Data[1].AsDouble());
 
@@ -669,8 +669,8 @@ namespace Altaxo.Serialization.Origin.Tests
       Assert.Equal(0, c.BeginRow);
       Assert.Equal(2, c.EndRow);
       Assert.Empty(c.LongName);
-      Assert.Empty(c.Units);
-      Assert.Equal("T&N", c.Comments);
+      Assert.Empty(c.Unit);
+      Assert.Equal("T&N", c.Comment);
       Assert.Equal(1.25, c.Data[0].AsDouble());
       Assert.Equal(1.75, c.Data[1].AsDouble());
 
@@ -679,8 +679,8 @@ namespace Altaxo.Serialization.Origin.Tests
       Assert.Equal(0, c.BeginRow);
       Assert.Equal(2, c.EndRow);
       Assert.Empty(c.LongName);
-      Assert.Empty(c.Units);
-      Assert.Equal("T&N", c.Comments);
+      Assert.Empty(c.Unit);
+      Assert.Equal("T&N", c.Comment);
       Assert.Equal(1, c.Data[0].AsDouble());
       Assert.Equal("Text", c.Data[1].AsString());
 
@@ -689,8 +689,8 @@ namespace Altaxo.Serialization.Origin.Tests
       Assert.Equal(0, c.BeginRow);
       Assert.Equal(2, c.EndRow);
       Assert.Empty(c.LongName);
-      Assert.Empty(c.Units);
-      Assert.Equal("T&N", c.Comments);
+      Assert.Empty(c.Unit);
+      Assert.Equal("T&N", c.Comment);
       Assert.Equal(1.25, c.Data[0].AsDouble());
       Assert.Equal("Text", c.Data[1].AsString());
 
@@ -699,8 +699,8 @@ namespace Altaxo.Serialization.Origin.Tests
       Assert.Equal(0, c.BeginRow);
       Assert.Equal(2, c.EndRow);
       Assert.Empty(c.LongName);
-      Assert.Empty(c.Units);
-      Assert.Equal("Text", c.Comments);
+      Assert.Empty(c.Unit);
+      Assert.Equal("Text", c.Comment);
       Assert.Equal("1.25", c.Data[0].AsString());
       Assert.Equal("1.75", c.Data[1].AsString());
 
@@ -709,8 +709,8 @@ namespace Altaxo.Serialization.Origin.Tests
       Assert.Equal(0, c.BeginRow);
       Assert.Equal(2, c.EndRow);
       Assert.Empty(c.LongName);
-      Assert.Empty(c.Units);
-      Assert.Equal("Time HH:MM", c.Comments);
+      Assert.Empty(c.Unit);
+      Assert.Equal("Time HH:MM", c.Comment);
       Assert.Equal(new TimeSpan(20, 35, 0), RoundToSecond(c.Data[0].AsTimeSpan().Value, 2));
       Assert.Equal(new TimeSpan(11, 13, 0), RoundToSecond(c.Data[1].AsTimeSpan().Value, 2));
 
@@ -719,8 +719,8 @@ namespace Altaxo.Serialization.Origin.Tests
       Assert.Equal(0, c.BeginRow);
       Assert.Equal(2, c.EndRow);
       Assert.Empty(c.LongName);
-      Assert.Empty(c.Units);
-      Assert.Equal("Date MM/DD/YYYY HH:MM", c.Comments);
+      Assert.Empty(c.Unit);
+      Assert.Equal("Date MM/DD/YYYY HH:MM", c.Comment);
       Assert.Equal(new DateTime(2021, 4, 27, 13, 14, 00), RoundToSecond(c.Data[0].AsDateTime().Value, 1));
       Assert.Equal(new DateTime(2001, 9, 13, 1, 24, 00), RoundToSecond(c.Data[1].AsDateTime().Value, 1));
     }
@@ -750,7 +750,7 @@ namespace Altaxo.Serialization.Origin.Tests
           Assert.Equal(0, c.BeginRow);
           Assert.Equal(2, c.EndRow);
           Assert.Empty(c.LongName);
-          Assert.Empty(c.Units);
+          Assert.Empty(c.Unit);
           if (spreadSheet.Name == "Numbers")
           {
             Assert.Equal(1, c.Data[0].AsDouble());
@@ -777,31 +777,31 @@ namespace Altaxo.Serialization.Origin.Tests
           }
         }
         Assert.Equal(SpreadColumnType.X, spreadSheet.Columns[0].ColumnType);
-        Assert.Equal("X", spreadSheet.Columns[0].Comments);
+        Assert.Equal("X", spreadSheet.Columns[0].Comment);
 
         Assert.Equal(SpreadColumnType.Y, spreadSheet.Columns[1].ColumnType);
-        Assert.Equal("Y", spreadSheet.Columns[1].Comments);
+        Assert.Equal("Y", spreadSheet.Columns[1].Comment);
 
         Assert.Equal(SpreadColumnType.Z, spreadSheet.Columns[2].ColumnType);
-        Assert.Equal("Z", spreadSheet.Columns[2].Comments);
+        Assert.Equal("Z", spreadSheet.Columns[2].Comment);
 
         Assert.Equal(SpreadColumnType.XErr, spreadSheet.Columns[3].ColumnType);
-        Assert.Equal("xError", spreadSheet.Columns[3].Comments);
+        Assert.Equal("xError", spreadSheet.Columns[3].Comment);
 
         Assert.Equal(SpreadColumnType.YErr, spreadSheet.Columns[4].ColumnType);
-        Assert.Equal("yError", spreadSheet.Columns[4].Comments);
+        Assert.Equal("yError", spreadSheet.Columns[4].Comment);
 
         Assert.Equal(SpreadColumnType.Label, spreadSheet.Columns[5].ColumnType);
-        Assert.Equal("Label", spreadSheet.Columns[5].Comments);
+        Assert.Equal("Label", spreadSheet.Columns[5].Comment);
 
         Assert.Equal(SpreadColumnType.Ignore, spreadSheet.Columns[6].ColumnType);
-        Assert.Equal("Ignore", spreadSheet.Columns[6].Comments);
+        Assert.Equal("Ignore", spreadSheet.Columns[6].Comment);
 
         Assert.Equal(SpreadColumnType.Group, spreadSheet.Columns[7].ColumnType);
-        Assert.Equal("Group", spreadSheet.Columns[7].Comments);
+        Assert.Equal("Group", spreadSheet.Columns[7].Comment);
 
         Assert.Equal(SpreadColumnType.Subject, spreadSheet.Columns[8].ColumnType);
-        Assert.Equal("Subject", spreadSheet.Columns[8].Comments);
+        Assert.Equal("Subject", spreadSheet.Columns[8].Comment);
       }
     }
 
@@ -1000,8 +1000,8 @@ namespace Altaxo.Serialization.Origin.Tests
             Assert.Equal(3, c.EndRow);
 
           Assert.Empty(c.LongName);
-          Assert.Empty(c.Units);
-          Assert.Empty(c.Comments);
+          Assert.Empty(c.Unit);
+          Assert.Empty(c.Comment);
           if (spreadSheet.Name == "Numbers")
           {
             Assert.Equal(1.5, c.Data[0].AsDouble());

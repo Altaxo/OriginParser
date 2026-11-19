@@ -40,7 +40,7 @@ namespace Altaxo.Serialization.Origin.SysVariations
 
                 Assert.Equal("A", columnA.Name);
                 Assert.Equal(ValueType.TextNumeric, columnA.ValueType);
-                Assert.Equal(SpreadColumnType.X, columnA.SpreadColumnType);
+                Assert.Equal(SpreadColumnType.X, columnA.ColumnType);
                 Assert.Empty(columnA.LongName);
                 Assert.Empty(columnA.Unit);
                 Assert.Equal($"In sheet {iSheet + 1}", columnA.Comment);
@@ -48,7 +48,7 @@ namespace Altaxo.Serialization.Origin.SysVariations
 
                 Assert.Equal("B", columnB.Name);
                 Assert.Equal(ValueType.TextNumeric, columnB.ValueType);
-                Assert.Equal(SpreadColumnType.Y, columnB.SpreadColumnType);
+                Assert.Equal(SpreadColumnType.Y, columnB.ColumnType);
                 Assert.Empty(columnB.LongName);
                 Assert.Empty(columnB.Unit);
                 Assert.Equal($"In sheet {iSheet + 1}", columnB.Comment);
@@ -60,42 +60,42 @@ namespace Altaxo.Serialization.Origin.SysVariations
                 {
                     Assert.Equal(31, columnA.Width);
 
-                    Assert.NotNull(columnA.Values);
-                    Assert.Equal(6, columnA.Values.Count);
+                    Assert.NotNull(columnA.Data);
+                    Assert.Equal(6, columnA.Data.Count);
 
-                    Assert.Equal(1.0, columnA.Values[0]);
-                    Assert.Equal(2.0, columnA.Values[1]);
-                    Assert.Equal(3.0, columnA.Values[2]);
-                    Assert.Equal("A", columnA.Values[3]);
-                    Assert.Equal("B", columnA.Values[4]);
-                    Assert.Equal("C", columnA.Values[5]);
-                    for (int i = 6; i < columnA.Values.Count; i++) { Assert.True(columnA.Values[i].IsCellEmpty, $"Cell A[{i}] contains {columnA.Values[i]}"); }
+                    Assert.Equal(1.0, columnA.Data[0]);
+                    Assert.Equal(2.0, columnA.Data[1]);
+                    Assert.Equal(3.0, columnA.Data[2]);
+                    Assert.Equal("A", columnA.Data[3]);
+                    Assert.Equal("B", columnA.Data[4]);
+                    Assert.Equal("C", columnA.Data[5]);
+                    for (int i = 6; i < columnA.Data.Count; i++) { Assert.True(columnA.Data[i].IsCellEmpty, $"Cell A[{i}] contains {columnA.Data[i]}"); }
 
 
                     Assert.Equal(17, columnB.Width);
-                    Assert.Equal(6, columnB.Values.Count);
-                    Assert.Equal(4.0, columnB.Values[0]);
-                    Assert.Equal(5.0, columnB.Values[1]);
-                    Assert.Equal(6.0, columnB.Values[2]);
-                    Assert.Equal("D", columnB.Values[3]);
-                    Assert.Equal("E", columnB.Values[4]);
-                    Assert.Equal("F", columnB.Values[5]);
-                    for (int i = 6; i < columnB.Values.Count; i++) { Assert.True(columnB.Values[i].IsCellEmpty, $"Cell B[{i}] contains {columnB.Values[i]}"); }
+                    Assert.Equal(6, columnB.Data.Count);
+                    Assert.Equal(4.0, columnB.Data[0]);
+                    Assert.Equal(5.0, columnB.Data[1]);
+                    Assert.Equal(6.0, columnB.Data[2]);
+                    Assert.Equal("D", columnB.Data[3]);
+                    Assert.Equal("E", columnB.Data[4]);
+                    Assert.Equal("F", columnB.Data[5]);
+                    for (int i = 6; i < columnB.Data.Count; i++) { Assert.True(columnB.Data[i].IsCellEmpty, $"Cell B[{i}] contains {columnB.Data[i]}"); }
 
                 }
                 else
                 {
                     Assert.Equal(6.7, columnA.Width, 1E-6);
-                    Assert.NotNull(columnA.Values);
-                    Assert.Single(columnA.Values);
-                    Assert.Equal(iSheet + 1.0, columnA.Values[0]);
-                    for (int i = 1; i < columnA.Values.Count; i++) { Assert.True(columnA.Values[i].IsCellEmpty, $"Cell A[{i}] contains {columnA.Values[i]}"); }
+                    Assert.NotNull(columnA.Data);
+                    Assert.Single(columnA.Data);
+                    Assert.Equal(iSheet + 1.0, columnA.Data[0]);
+                    for (int i = 1; i < columnA.Data.Count; i++) { Assert.True(columnA.Data[i].IsCellEmpty, $"Cell A[{i}] contains {columnA.Data[i]}"); }
 
                     Assert.Equal(6.7, columnB.Width, 1E-6);
-                    Assert.NotNull(columnB.Values);
-                    Assert.Single(columnB.Values);
-                    Assert.Equal(iSheet + 1.0, columnB.Values[0]);
-                    for (int i = 1; i < columnB.Values.Count; i++) { Assert.True(columnB.Values[i].IsCellEmpty, $"Cell B[{i}] contains {columnB.Values[i]}"); }
+                    Assert.NotNull(columnB.Data);
+                    Assert.Single(columnB.Data);
+                    Assert.Equal(iSheet + 1.0, columnB.Data[0]);
+                    for (int i = 1; i < columnB.Data.Count; i++) { Assert.True(columnB.Data[i].IsCellEmpty, $"Cell B[{i}] contains {columnB.Data[i]}"); }
                 }
             }
         }

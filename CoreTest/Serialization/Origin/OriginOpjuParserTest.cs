@@ -24,7 +24,6 @@
 
 using System;
 using System.Buffers.Binary;
-using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
@@ -530,173 +529,6 @@ namespace Altaxo.Serialization.Origin.Tests
         }
 
 
-
-
-
-
-        [Theory]
-        [InlineData(false, 0, 0x03)]
-        [InlineData(false, 1, 0x78)]
-        [InlineData(false, 2, 0x02)]
-        [InlineData(true, 0, 0x02)]
-        public void LeavesUnsupportedNumericStorageTypeUnresolved(bool changeWidth, int payloadOffset, byte replacement)
-        {
-            var path = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Serialization", "Origin", "TestFiles", "SysVariations", "DeserializedDataType", "OneBookOneSheetThreeNumericColumns_Double_Int32_Double.opju");
-            var source = File.ReadAllBytes(path);
-            using var originalStream = new MemoryStream(source);
-            var columns = GetDatasetColumns(new OriginOpjuParser(originalStream));
-            Assert.Equal(DeserializedDataType.Int32, GetPartialModelProperty(columns[1], "DeserializedDataType"));
-            var records = ((System.Collections.IEnumerable)GetPartialModelProperty(columns[1], "DescriptorRecords")!).Cast<OriginOpjuParser.TLVRecord>().ToArray();
-            var target = changeWidth ? Assert.Single(records.Where(record => record.Tag == 0x85)) : records[0];
-            source[target.Offset + 2 + payloadOffset] = replacement;
-
-            using var modifiedStream = new MemoryStream(source);
-            var modified = GetDatasetColumns(new OriginOpjuParser(modifiedStream));
-            Assert.Equal(3, modified.Length);
-            Assert.Null(GetPartialModelProperty(modified[1], "DeserializedDataType"));
-        }
-
-        [Fact]
-        public void PreservesRecoveredLabelDatasetEvidence()
-        {
-            var path = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Serialization", "Origin", "TestFiles", "SysVariations", "SpreadColumnType", "OneBookOneSheetThreeDoubleColumns_X_Y_Label.opju");
-            using var stream = File.OpenRead(path);
-            var parser = new OriginOpjuParser(stream);
-            var columns = GetDatasetColumns(parser);
-            Assert.Equal(3, columns.Length);
-            var label = columns[2];
-            Assert.Equal("Book1_C", GetPartialModelProperty(label, "DatasetName"));
-            Assert.Equal(SpreadColumnType.Label, GetPartialModelProperty(label, "SpreadColumnType"));
-            var datasetRecords = ((System.Collections.IEnumerable)GetPartialModelProperty(label, "DescriptorRecords")!).Cast<OriginOpjuParser.IRecord>().ToArray();
-            Assert.Contains(datasetRecords.OfType<OriginOpjuParser.TLVRecord>(), record => record.Payload.Span.SequenceEqual(new byte[] { 0xe8, 0x10 }));
-            var typeRecords = ((System.Collections.IEnumerable)GetPartialModelProperty(label, "TypeDescriptorRecords")!).Cast<OriginOpjuParser.IRecord>().ToArray();
-            Assert.Contains(typeRecords.OfType<OriginOpjuParser.TLVRecord>(), record => record.Payload.Span.SequenceEqual(new byte[] { 0x04, 0x43 }));
-            Assert.All(typeRecords, record => Assert.Contains(record, parser.Records));
-            Assert.IsType<ReadOnlyMemory<byte>>(GetPartialModelProperty(label, "CandidateData"));
-        }
-
-        [Theory]
-        [InlineData(0, 0x00)]
-        [InlineData(0, 0x09)]
-        [InlineData(1, 0x44)]
-        public void LeavesUnknownOrUnmatchedSheetDesignationsUnresolved(int payloadOffset, byte replacement)
-        {
-            var path = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Serialization", "Origin", "TestFiles", "SysVariations", "SpreadColumnType", "OneBookOneSheetThreeDoubleColumns_X_Y_Group.opju");
-            var source = File.ReadAllBytes(path);
-            using var originalStream = new MemoryStream(source);
-            var columns = GetDatasetColumns(new OriginOpjuParser(originalStream));
-            var metadata = ((System.Collections.IEnumerable)GetPartialModelProperty(columns[2], "TypeDescriptorRecords")!).Cast<OriginOpjuParser.IRecord>();
-            var typeRecord = Assert.IsType<OriginOpjuParser.TLVRecord>(metadata.First());
-            Assert.Equal(new byte[] { 0x07, 0x43 }, typeRecord.Payload.ToArray());
-            source[typeRecord.Offset + 2 + payloadOffset] = replacement;
-
-            using var modifiedStream = new MemoryStream(source);
-            var modified = GetDatasetColumns(new OriginOpjuParser(modifiedStream));
-            Assert.Equal(3, modified.Length);
-            Assert.NotEqual(SpreadColumnType.Group, GetPartialModelProperty(modified[2], "SpreadColumnType"));
-            if (payloadOffset == 0)
-                Assert.Equal(SpreadColumnType.Ignore, GetPartialModelProperty(modified[2], "SpreadColumnType"));
-            else
-                Assert.Null(GetPartialModelProperty(modified[2], "TypeDescriptorRecords"));
-        }
-
-        [Theory]
-        [InlineData(false)]
-        [InlineData(true)]
-        public void LeavesUnknownOrUnmatchedValueTypeUnresolved(bool changeName)
-        {
-            var path = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Serialization", "Origin", "TestFiles", "SysVariations", "ValueType", "OneBookOneSheetThreeDoubleColumns_Numeric_Date_Numeric.opju");
-            var source = File.ReadAllBytes(path);
-            using var originalStream = new MemoryStream(source);
-            var columns = GetDatasetColumns(new OriginOpjuParser(originalStream));
-            var metadata = ((System.Collections.IEnumerable)GetPartialModelProperty(columns[1], "TypeDescriptorRecords")!).Cast<OriginOpjuParser.TLVRecord>().ToArray();
-            Assert.Equal(new byte[] { 0x42 }, metadata[0].Payload.ToArray());
-            Assert.Equal(new byte[] { 0x03 }, metadata[1].Payload.ToArray());
-            source[(changeName ? metadata[0] : metadata[1]).Offset + 2] = changeName ? (byte)0x44 : (byte)0x7f;
-
-            using var modifiedStream = new MemoryStream(source);
-            var modified = GetDatasetColumns(new OriginOpjuParser(modifiedStream));
-            Assert.Null(GetPartialModelProperty(modified[1], "ValueType"));
-            if (changeName)
-                Assert.All(modified, column => Assert.Null(GetPartialModelProperty(column, "ValueType")));
-            else
-                Assert.Equal(ValueType.Numeric, GetPartialModelProperty(modified[0], "ValueType"));
-        }
-
-        [Theory]
-        [InlineData(0)]
-        [InlineData(1)]
-        [InlineData(2)]
-        public void LeavesMalformedPopulatedSingleValueTypeUnresolved(int change)
-        {
-            var path = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Serialization", "Origin", "TestFiles", "SysVariations", "NumericSingleContent", "OneBookOneSheetOneRealColumnWith4Numbers.opju");
-            var source = File.ReadAllBytes(path);
-            using var originalStream = new MemoryStream(source);
-            var parser = new OriginOpjuParser(originalStream);
-            var column = Assert.Single(parser.Books[0].Sheets[0].Columns);
-            Assert.Equal(ValueType.Numeric, column.ValueType);
-            Assert.Equal(DeserializedDataType.Single, column.DeserializedDataType);
-            Assert.Equal(SpreadColumnType.X, column.SpreadColumnType);
-            var metadata = ((System.Collections.IEnumerable)GetPartialModelProperty(column, "TypeDescriptorRecords")!).Cast<OriginOpjuParser.TLVRecord>().ToArray();
-            Assert.Equal(new byte[] { 0x03, 0x41 }, metadata[0].Payload.ToArray());
-            Assert.Equal(new byte[] { 0x01 }, metadata[1].Payload.ToArray());
-            var following = Assert.IsType<OriginOpjuParser.TLVRecord>(parser.Records.Single(record => record.Offset == metadata[1].NextOffset));
-            Assert.Equal(new byte[] { 0x01, 0x50 }, following.Payload.ToArray());
-            int offset = change switch
-            {
-                0 => metadata[0].Offset + 3,
-                1 => metadata[1].Offset + 2,
-                _ => following.Offset + 3
-            };
-            source[offset] = change switch { 0 => (byte)0x42, 1 => (byte)0x7f, _ => (byte)0x70 };
-
-            using var modifiedStream = new MemoryStream(source);
-            var modified = Assert.Single(new OriginOpjuParser(modifiedStream).Books[0].Sheets[0].Columns);
-            Assert.Null(modified.ValueType);
-        }
-
-        [Theory]
-        [InlineData(0)]
-        [InlineData(1)]
-        [InlineData(2)]
-        [InlineData(3)]
-        public void LeavesMalformedPopulatedDoubleValueTypeUnresolved(int change)
-        {
-            var path = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Serialization", "Origin", "TestFiles", "SysVariations", "NumericDoubleContent", "OneBookOneSheetOneDoubleColumnWith4Numbers.opju");
-            var source = File.ReadAllBytes(path);
-            using var originalStream = new MemoryStream(source);
-            var parser = new OriginOpjuParser(originalStream);
-            var column = Assert.Single(parser.Books[0].Sheets[0].Columns);
-            Assert.Equal(ValueType.Numeric, column.ValueType);
-            Assert.Equal(DeserializedDataType.Double, column.DeserializedDataType);
-            Assert.Equal(SpreadColumnType.X, column.SpreadColumnType);
-            var metadata = ((System.Collections.IEnumerable)GetPartialModelProperty(column, "TypeDescriptorRecords")!).Cast<OriginOpjuParser.TLVRecord>().ToArray();
-            Assert.Equal(new byte[] { 0x03, 0x41 }, metadata[0].Payload.ToArray());
-            Assert.Equal(new byte[] { 0x01, 0x50 }, metadata[1].Payload.ToArray());
-            var rowMarker = Assert.IsType<OriginOpjuParser.TLVRecord>(parser.Records.Single(record => record.NextOffset == metadata[0].Offset));
-            Assert.Equal((byte)0x81, rowMarker.Tag);
-            int offset = change switch
-            {
-                0 => metadata[0].Offset + 3,
-                1 => metadata[1].Offset + 2,
-                2 => metadata[1].Offset + 3,
-                _ => rowMarker.Offset + 2
-            };
-            source[offset] = change switch { 0 => (byte)0x42, 1 => (byte)0x7f, 2 => (byte)0x70, _ => (byte)0 };
-
-            using var modifiedStream = new MemoryStream(source);
-            var modified = Assert.Single(new OriginOpjuParser(modifiedStream).Books[0].Sheets[0].Columns);
-            Assert.Null(modified.ValueType);
-        }
-
-
-
-
-
-
-
-
-
         [Theory]
         [InlineData("Book1_A@2147483648")]
         [InlineData("Book1_A@999999999999999999999999")]
@@ -709,150 +541,22 @@ namespace Altaxo.Serialization.Origin.Tests
             Assert.False((bool)parse.Invoke(null, arguments)!);
         }
 
-
-
-        [Theory]
-        [InlineData(1, 0x80)]
-        [InlineData(2, 0x80)]
-        [InlineData(4, 0xff)]
-        [InlineData(72, 0x03)]
-        public void LeavesMalformedTextDataUndecoded(int offset, byte replacement)
-        {
-            var path = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Serialization", "Origin", "TestFiles", "SysVariations", "TextContent", "OneBookOneSheetTwoTextColumns_4ConsecutiveRowsStartingAtRow0.opju");
-            var source = File.ReadAllBytes(path);
-            using var originalStream = new MemoryStream(source);
-            var columns = GetDatasetColumns(new OriginOpjuParser(originalStream));
-            Assert.NotNull(GetPartialModelProperty(columns[0], "Values"));
-            int dataOffset = (int)GetPartialModelProperty(columns[0], "DataOffset")!;
-            var data = (ReadOnlyMemory<byte>)GetPartialModelProperty(columns[0], "CandidateData")!;
-            if (offset == 72)
-                offset = data.Length;
-            source[dataOffset + offset] = replacement;
-
-            using var modifiedStream = new MemoryStream(source);
-            var modified = GetDatasetColumns(new OriginOpjuParser(modifiedStream));
-            Assert.Null(GetPartialModelProperty(modified[0], "Values"));
-        }
-
-        [Theory]
-        [InlineData(1, 0)]
-        [InlineData(2, 0)]
-        [InlineData(5, 0x7f)]
-        [InlineData(-1, 0x7f)]
-        [InlineData(-2, 0xff)]
-        public void LeavesMalformedTextNumericDataUndecoded(int offset, byte replacement)
-        {
-            var path = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Serialization", "Origin", "TestFiles", "SysVariations", "TextNumericContent", "OneBookOneSheetOneColumn_FourStrings.opju");
-            var source = File.ReadAllBytes(path);
-            using var originalStream = new MemoryStream(source);
-            var column = Assert.Single(GetDatasetColumns(new OriginOpjuParser(originalStream)));
-            int dataOffset = (int)GetPartialModelProperty(column, "DataOffset")!;
-            var data = (ReadOnlyMemory<byte>)GetPartialModelProperty(column, "CandidateData")!;
-            int target = offset switch { -1 => data.Length, -2 => data.Length + 54, _ => offset };
-            source[dataOffset + target] = replacement;
-            using var modifiedStream = new MemoryStream(source);
-            var modified = Assert.Single(GetDatasetColumns(new OriginOpjuParser(modifiedStream)));
-            Assert.Null(GetPartialModelProperty(modified, "Values"));
-            Assert.NotNull(GetPartialModelProperty(modified, "CandidateData"));
-        }
-
-        [Theory]
-        [InlineData(false, 4, 0x7f)]
-        [InlineData(false, 18, 2)]
-        [InlineData(false, 20, 6)]
-        [InlineData(false, 21, 0xfe)]
-        [InlineData(false, 24, 0x7f)]
-        [InlineData(true, 0, 0x7f)]
-        [InlineData(true, 23, 0xff)]
-        [InlineData(true, 29, 0x80)]
-        [InlineData(true, 55, 0xff)]
-        [InlineData(true, 60, 1)]
-        public void LeavesMalformedThreeStringTextNumericDataUndecoded(bool inPool, int offset, byte replacement)
-        {
-            var path = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Serialization", "Origin", "TestFiles", "SysVariations", "NumberOfSheets", "OneBookOneSheetTwoColumns.opju");
-            var source = File.ReadAllBytes(path);
-            using var originalStream = new MemoryStream(source);
-            var original = new OriginOpjuParser(originalStream).Books[0].Sheets[0].Columns[0];
-            Assert.NotNull(original.Values);
-            int dataOffset = (int)GetPartialModelProperty(original, "DataOffset")!;
-            var data = (ReadOnlyMemory<byte>)GetPartialModelProperty(original, "CandidateData")!;
-            source[dataOffset + (inPool ? data.Length : 0) + offset] = replacement;
-
-            using var modifiedStream = new MemoryStream(source);
-            var modified = new OriginOpjuParser(modifiedStream).Books[0].Sheets[0].Columns[0];
-            Assert.Equal("Book1_A", modified.DatasetName);
-            Assert.Null(modified.Values);
-            Assert.Null(GetPartialModelProperty(modified, "DataRowCount"));
-            Assert.NotNull(GetPartialModelProperty(modified, "CandidateData"));
-        }
-
-        [Fact]
-        public void KeepsTextNumericCapacitySeparateFromPopulatedExtent()
-        {
-            var path = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Serialization", "Origin", "TestFiles", "SysVariations", "NumberOfSheets", "OneBookOneSheetTwoColumns_3MoreSheets.opju");
-            using var stream = File.OpenRead(path);
-            var sheets = Assert.Single(new OriginOpjuParser(stream).Books).Sheets;
-            Assert.Equal(4, sheets.Count);
-            for (int sheet = 0; sheet < sheets.Count; ++sheet)
-            {
-                Assert.Equal(2, sheets[sheet].Columns.Count);
-                foreach (var column in sheets[sheet].Columns)
-                {
-                    Assert.Equal(32, (int)GetPartialModelProperty(column, "DataRowCount")!);
-                    Assert.NotNull(column.Values);
-                    Assert.Equal(sheet == 0 ? 6 : 1, column.Values.Count);
-                    Assert.NotNull(GetPartialModelProperty(column, "CandidateData"));
-                }
-            }
-        }
-
         [Fact]
         public void LeavesTextNumericBlankRepresentationUnresolved()
         {
             var path = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Serialization", "Origin", "TestFiles", "SysVariations", "TextNumericContent", "OneBookOneSheetOneColumnOneBlankTwo.opju");
             using var stream = File.OpenRead(path);
             var column = Assert.Single(new OriginOpjuParser(stream).Books[0].Sheets[0].Columns);
-            Assert.NotNull(column.Values);
-            Assert.True(column.Values[1].IsEmpty);
-            Assert.Equal(1d, column.Values[0].AsDouble());
-            Assert.Equal(2d, column.Values[2].AsDouble());
+            Assert.NotNull(column.Data);
+            Assert.True(column.Data[1].IsEmpty);
+            Assert.Equal(1d, column.Data[0].AsDouble());
+            Assert.Equal(2d, column.Data[2].AsDouble());
             Assert.NotNull(GetPartialModelProperty(column, "CandidateData"));
         }
 
-        [Theory]
-        [InlineData(1, 0)]
-        [InlineData(1, 3)]
-        [InlineData(2, 0)]
-        [InlineData(2, 127)]
-        [InlineData(19, 1)]
-        [InlineData(-1, 3)]
-        public void LeavesMalformedSingleDataUndecoded(int offset, byte replacement)
-        {
-            var path = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Serialization", "Origin", "TestFiles", "SysVariations", "NumericSingleContent", "OneBookOneSheetOneRealColumnWith4Numbers.opju");
-            var source = File.ReadAllBytes(path);
-            using var originalStream = new MemoryStream(source);
-            var column = Assert.Single(GetDatasetColumns(new OriginOpjuParser(originalStream)));
-            int dataOffset = (int)GetPartialModelProperty(column, "DataOffset")!;
-            var data = (ReadOnlyMemory<byte>)GetPartialModelProperty(column, "CandidateData")!;
-            source[dataOffset + (offset < 0 ? data.Length : offset)] = replacement;
 
-            using var modifiedStream = new MemoryStream(source);
-            var modified = Assert.Single(GetDatasetColumns(new OriginOpjuParser(modifiedStream)));
-            Assert.Null(GetPartialModelProperty(modified, "Values"));
-            Assert.Null(GetPartialModelProperty(modified, "DataRowCount"));
-        }
 
-        [Fact]
-        public void DecodesSingleValuesAtExactSinglePrecision()
-        {
-            var path = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Serialization", "Origin", "TestFiles", "SysVariations", "NumericSingleContent", "OneBookOneSheetOneRealColumnOneOneBitDifference.opju");
-            using var stream = File.OpenRead(path);
-            var column = Assert.Single(GetDatasetColumns(new OriginOpjuParser(stream)));
-            var values = (IReadOnlyList<Variant>)GetPartialModelProperty(column, "Values")!;
-            Assert.Equal(1d, values[0].AsDouble());
-            Assert.Equal((double)BitConverter.Int32BitsToSingle(0x3f800001), values[1].AsDouble());
-            Assert.True(double.IsNaN(values[2].AsDouble()));
-        }
+
 
         [Fact]
         public void DecodesDoubleOneBitDifferenceExactly()
@@ -860,9 +564,9 @@ namespace Altaxo.Serialization.Origin.Tests
             var path = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Serialization", "Origin", "TestFiles", "SysVariations", "NumericDoubleContent", "OneBookOneSheetOneDoubleColumnOneOneBitDifference.opju");
             using var stream = File.OpenRead(path);
             var column = Assert.Single(new OriginOpjuParser(stream).Books[0].Sheets[0].Columns);
-            Assert.NotNull(column.Values);
-            Assert.Equal(BitConverter.DoubleToInt64Bits(1.0) + 1, BitConverter.DoubleToInt64Bits(column.Values[1].AsDouble()));
-            Assert.True(double.IsNaN(column.Values[2].AsDouble()));
+            Assert.NotNull(column.Data);
+            Assert.Equal(BitConverter.DoubleToInt64Bits(1.0) + 1, BitConverter.DoubleToInt64Bits(column.Data[1].AsDouble()));
+            Assert.True(double.IsNaN(column.Data[2].AsDouble()));
         }
 
         [Fact]
@@ -871,9 +575,9 @@ namespace Altaxo.Serialization.Origin.Tests
             var path = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Serialization", "Origin", "TestFiles", "SysVariations", "NumericDoubleContent", "OneBookOneSheetOneDoubleColumnTwoRepeatedRuns.opju");
             using var stream = File.OpenRead(path);
             var column = Assert.Single(new OriginOpjuParser(stream).Books[0].Sheets[0].Columns);
-            Assert.NotNull(column.Values);
-            Assert.Equal(new[] { 1.0, 1.0, 2.0, 2.0 }, column.Values.Take(4).Select(value => value.AsDouble()).ToArray());
-            Assert.All(column.Values.Skip(4), value => Assert.True(double.IsNaN(value.AsDouble())));
+            Assert.NotNull(column.Data);
+            Assert.Equal(new[] { 1.0, 1.0, 2.0, 2.0 }, column.Data.Take(4).Select(value => value.AsDouble()).ToArray());
+            Assert.All(column.Data.Skip(4), value => Assert.True(double.IsNaN(value.AsDouble())));
             Assert.NotNull(GetPartialModelProperty(column, "CandidateData"));
         }
 

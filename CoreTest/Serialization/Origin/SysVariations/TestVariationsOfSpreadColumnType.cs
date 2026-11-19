@@ -49,7 +49,7 @@ namespace Altaxo.Serialization.Origin.SysVariations
                     2 => expectedSpreadColumnType3,
                     _ => throw new InvalidOperationException("Unexpected column index")
                 };
-                Assert.Equal(expectedColumnType, column.SpreadColumnType); // the expected column types are checked
+                Assert.Equal(expectedColumnType, column.ColumnType); // the expected column types are checked
 
                 Assert.Equal(6.7, column.Width, 1E-6); // the columns width is expected to be 6.7 for all columns
                 Assert.Empty(column.LongName);

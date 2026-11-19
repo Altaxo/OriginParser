@@ -49,17 +49,17 @@ namespace Altaxo.Serialization.Origin.SysVariations
             Assert.Equal("A", column.Name); // the columns short names are expected to be A, B, C, D, E, F, G, H, I for the first 9 columns
             Assert.Equal(ValueType.Numeric, column.ValueType); // the expected column types are checked
             Assert.Equal(DeserializedDataType.Single, column.DeserializedDataType); // the expected column types are checked
-            Assert.Equal(SpreadColumnType.X, column.SpreadColumnType);
+            Assert.Equal(SpreadColumnType.X, column.ColumnType);
             Assert.Equal(6.7, column.Width, 1E-6); // the columns width is expected to be 6.7 for all columns
             Assert.Empty(column.LongName);
             Assert.Empty(column.Unit);
             Assert.Empty(column.Comment);
 
-            Assert.NotNull(column.Values);
-            Assert.True(column.Values.Count >= expectedContent.Length, $"Expected at least {expectedContent.Length} decoded rows, got {column.Values.Count}.");
-            for (int row = 0; row < column.Values.Count; row++)
+            Assert.NotNull(column.Data);
+            Assert.True(column.Data.Count >= expectedContent.Length, $"Expected at least {expectedContent.Length} decoded rows, got {column.Data.Count}.");
+            for (int row = 0; row < column.Data.Count; row++)
             {
-                var actual = column.Values[row];
+                var actual = column.Data[row];
                 if (row < expectedContent.Length)
                 {
                     Assert.True(actual.IsDouble, $"Row {row}: expected a numeric value.");

@@ -700,6 +700,16 @@ namespace Altaxo.Serialization.Origin
         /// <summary>Label associated with the window.</summary>
         public string Label;
 
+        /// <summary>
+        /// The long name associated with the window (can contain special chars).
+        /// </summary>
+        public string LongName;
+
+        /// <summary>
+        /// The comment associated with the window.
+        /// </summary>
+        public string Comment;
+
         /// <summary>Identifier for the object in the original file/project.</summary>
         public int ObjectID;
 
@@ -1043,13 +1053,17 @@ namespace Altaxo.Serialization.Origin
         public string LongName { get; set; } = string.Empty;
 
         /// <summary>Gets or sets the units of the column.</summary>
-        public string Units { get; set; } = string.Empty;
+        public string Unit { get; set; } = string.Empty;
 
         /// <summary>Gets or sets the comments of the column.</summary>
-        public string Comments { get; set; } = string.Empty;
+        public string Comment { get; set; } = string.Empty;
 
-        /// <summary>Display width for the column.</summary>
-        public int Width;
+        /// <summary>Display width for the column (multiplied by 10).</summary>
+        public int Widthx10;
+
+
+        /// <summary>Real display width for the column.</summary>
+        public double Width => Widthx10 / 10.0;
 
         /// <summary>Index of the column within its sheet or dataset.</summary>
         public int Index;
@@ -1089,7 +1103,7 @@ namespace Altaxo.Serialization.Origin
             SignificantDigits = 6;
             DecimalPlaces = 6;
             NumericDisplayType = NumericDisplayType.DefaultDecimalDigits;
-            Width = 8;
+            Widthx10 = 8;
             Index = index;
             ColIndex = 0;
             Sheet = 0;

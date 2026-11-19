@@ -44,12 +44,12 @@ namespace Altaxo.Serialization.Origin.SysVariations
                 Assert.Empty(column.LongName);
                 Assert.Empty(column.Unit);
                 Assert.Empty(column.Comment);
-                Assert.True(column.Values.Count <= 39); // maximum number of rows in the test files is 39, so the number of values in each column should be less than or equal to 39
-                for (int j = 0; j < column.Values.Count; j++)
+                Assert.True(column.Data.Count <= 39); // maximum number of rows in the test files is 39, so the number of values in each column should be less than or equal to 39
+                for (int j = 0; j < column.Data.Count; j++)
                 {
-                    Assert.True(column.Values[j].IsCellEmpty);
+                    Assert.True(column.Data[j].IsCellEmpty);
                 }
-                Assert.Equal(i == expectedIndexOfXColumn ? SpreadColumnType.X : SpreadColumnType.Y, column.SpreadColumnType); // the expected column is the X column, all others are ignored
+                Assert.Equal(i == expectedIndexOfXColumn ? SpreadColumnType.X : SpreadColumnType.Y, column.ColumnType); // the expected column is the X column, all others are ignored
             }
         }
     }

@@ -53,17 +53,17 @@ namespace Altaxo.Serialization.Origin.SysVariations
                 {
                     Assert.Equal(DeserializedDataType.Double, column.DeserializedDataType); // the expected column types are checked
                 }
-                Assert.Equal(i == 0 ? SpreadColumnType.X : SpreadColumnType.Y, column.SpreadColumnType); // the expected column types are checked
+                Assert.Equal(i == 0 ? SpreadColumnType.X : SpreadColumnType.Y, column.ColumnType); // the expected column types are checked
                 Assert.Equal(6.7, column.Width, 1E-6); // the columns width is expected to be 6.7 for all columns
                 Assert.Empty(column.LongName);
                 Assert.Empty(column.Unit);
                 Assert.Empty(column.Comment);
 
-                if (column.Values is not null)
+                if (column.Data is not null)
                 {
-                    for (int j = 0; j < column.Values.Count; j++)
+                    for (int j = 0; j < column.Data.Count; j++)
                     {
-                        Assert.True(column.Values[j].IsCellEmpty);
+                        Assert.True(column.Data[j].IsCellEmpty);
                     }
                 }
             }

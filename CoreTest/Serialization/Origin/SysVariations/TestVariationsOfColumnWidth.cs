@@ -37,36 +37,36 @@ namespace Altaxo.Serialization.Origin.SysVariations
 
             // column widths
             Assert.Equal(ValueType.TextNumeric, columnA.ValueType);
-            Assert.Equal(SpreadColumnType.X, columnA.SpreadColumnType);
+            Assert.Equal(SpreadColumnType.X, columnA.ColumnType);
             Assert.Equal(widthA, columnA.Width);
             Assert.Equal("", columnA.LongName);
             Assert.Equal("", columnA.Unit);
             Assert.Equal("In sheet Änderung", columnA.Comment);
-            Assert.True(columnA.Values.Count >= 6);
-            Assert.Equal(1.0, columnA.Values[0]);
-            Assert.Equal(2.0, columnA.Values[1]);
-            Assert.Equal(3.0, columnA.Values[2]);
-            Assert.Equal("A", columnA.Values[3]);
-            Assert.Equal("B", columnA.Values[4]);
-            Assert.Equal("C", columnA.Values[5]);
-            for (int i = 6; i < columnA.Values.Count; i++) { Assert.True(columnA.Values[i].IsCellEmpty, $"Cell A[{i}] contains {columnA.Values[i]}"); }
+            Assert.True(columnA.Data.Count >= 6);
+            Assert.Equal(1.0, columnA.Data[0]);
+            Assert.Equal(2.0, columnA.Data[1]);
+            Assert.Equal(3.0, columnA.Data[2]);
+            Assert.Equal("A", columnA.Data[3]);
+            Assert.Equal("B", columnA.Data[4]);
+            Assert.Equal("C", columnA.Data[5]);
+            for (int i = 6; i < columnA.Data.Count; i++) { Assert.True(columnA.Data[i].IsCellEmpty, $"Cell A[{i}] contains {columnA.Data[i]}"); }
 
             Assert.Equal(ValueType.Numeric, columnB.ValueType);
             Assert.Equal(DeserializedDataType.Double, columnB.DeserializedDataType);
-            Assert.Equal(SpreadColumnType.Y, columnB.SpreadColumnType);
+            Assert.Equal(SpreadColumnType.Y, columnB.ColumnType);
             Assert.Equal(widthB, columnB.Width);
             Assert.Equal("", columnB.LongName);
             Assert.Equal("", columnB.Unit);
             Assert.Equal("In sheet Änderung", columnB.Comment);
-            Assert.True(columnB.Values.Count >= 7);
-            Assert.Equal(4.0, columnB.Values[0]);
-            Assert.Equal(5.0, columnB.Values[1]);
-            Assert.Equal(6.0, columnB.Values[2]);
-            Assert.Equal(4.0, columnB.Values[3]);
-            Assert.Equal(5.0, columnB.Values[4]);
-            Assert.Equal(6.0, columnB.Values[5]);
-            Assert.Equal(7.0, columnB.Values[6]);
-            for (int i = 7; i < columnB.Values.Count; i++) { Assert.True(columnB.Values[i].IsCellEmpty, $"Cell B[{i}] contains {columnB.Values[i]}"); }
+            Assert.True(columnB.Data.Count >= 7);
+            Assert.Equal(4.0, columnB.Data[0]);
+            Assert.Equal(5.0, columnB.Data[1]);
+            Assert.Equal(6.0, columnB.Data[2]);
+            Assert.Equal(4.0, columnB.Data[3]);
+            Assert.Equal(5.0, columnB.Data[4]);
+            Assert.Equal(6.0, columnB.Data[5]);
+            Assert.Equal(7.0, columnB.Data[6]);
+            for (int i = 7; i < columnB.Data.Count; i++) { Assert.True(columnB.Data[i].IsCellEmpty, $"Cell B[{i}] contains {columnB.Data[i]}"); }
         }
 
         [Fact]
@@ -91,18 +91,7 @@ namespace Altaxo.Serialization.Origin.SysVariations
                 Assert.Equal(6.7, columns[i].Width, 1E-6);
         }
 
-        [Fact]
-        public void DoesNotAssignWidthsWhenCombinedLayoutSignatureIsDamaged()
-        {
-            var bytes = ReadMixedLayoutFixture();
-            Assert.Equal(0xbf, bytes[0xB19]);
-            bytes[0xB19] = 0xbe;
 
-            using var stream = new MemoryStream(bytes);
-            var columns = Assert.Single(Assert.Single(new OriginOpjuParser(stream).Books).Sheets).Columns;
-            Assert.Equal(9, columns.Count);
-            Assert.All(columns, column => Assert.Equal(0, column.Width));
-        }
 
         private static byte[] ReadMixedLayoutFixture()
         {

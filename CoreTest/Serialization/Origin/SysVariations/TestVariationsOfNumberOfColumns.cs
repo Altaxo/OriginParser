@@ -33,15 +33,15 @@ namespace Altaxo.Serialization.Origin.SysVariations
                 Assert.Equal("" + (char)('A' + i), column.Name); // the columns short names are expected to be A, B, C, D, E, F, G, H, I for the first 9 columns
                 Assert.Equal(ValueType.Numeric, column.ValueType);
                 Assert.Equal(DeserializedDataType.Double, column.DeserializedDataType);
-                Assert.Equal(SpreadColumnType.Y, column.SpreadColumnType); // the expected column is the X column, all others are ignored
+                Assert.Equal(SpreadColumnType.Y, column.ColumnType); // the expected column is the X column, all others are ignored
                 Assert.Equal(6.7, column.Width, 1E-6); // the columns width is expected to be 6.7 for all columns
                 Assert.Empty(column.LongName);
                 Assert.Empty(column.Unit);
                 Assert.Empty(column.Comment);
-                Assert.True(column.Values.Count <= 39); // maximum number of rows in the test files is 39, so the number of values in each column should be less than or equal to 39
-                for (int j = 0; j < column.Values.Count; j++)
+                Assert.True(column.Data.Count <= 39); // maximum number of rows in the test files is 39, so the number of values in each column should be less than or equal to 39
+                for (int j = 0; j < column.Data.Count; j++)
                 {
-                    Assert.True(double.IsNaN(column.Values[j].AsDouble())); // we have no values, so all values should be NaN
+                    Assert.True(double.IsNaN(column.Data[j].AsDouble())); // we have no values, so all values should be NaN
                 }
             }
         }

@@ -51,16 +51,16 @@ namespace Altaxo.Serialization.Origin.SysVariations
 
                 Assert.Equal(ValueType.Numeric, column.ValueType); // the expected column types are checked
                 Assert.Equal(expectedColumnType, column.DeserializedDataType); // the expected column types are checked
-                Assert.Equal(SpreadColumnType.Y, column.SpreadColumnType);
+                Assert.Equal(SpreadColumnType.Y, column.ColumnType);
                 Assert.Equal(6.7, column.Width, 1E-6); // the columns width is expected to be 6.7 for all columns
                 Assert.Empty(column.LongName);
                 Assert.Empty(column.Unit);
                 Assert.Empty(column.Comment);
-                if (column.Values is not null)
+                if (column.Data is not null)
                 {
-                    for (int j = 0; j < column.Values.Count; j++)
+                    for (int j = 0; j < column.Data.Count; j++)
                     {
-                        Assert.True(column.Values[j].IsCellEmpty); // we have no values, so all values should be NaN
+                        Assert.True(column.Data[j].IsCellEmpty); // we have no values, so all values should be NaN
                     }
                 }
             }

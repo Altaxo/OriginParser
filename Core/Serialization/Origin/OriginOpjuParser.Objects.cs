@@ -29,18 +29,91 @@ namespace Altaxo.Serialization.Origin
 {
     public partial class OriginOpjuParser
     {
+        /// <summary>Represents a top-level window with common metadata and appearance settings.</summary>
+        public class Window
+        {
+            /// <summary>Name of the window.</summary>
+            public string Name;
+
+            /// <summary>
+            /// The long name associated with the window (can contain special chars).
+            /// </summary>
+            public string LongName;
+
+            /// <summary>
+            /// The comment associated with the window.
+            /// </summary>
+            public string Comment;
+
+            /// <summary>Project tree path of the folder the window is stored in.</summary>
+            public string FolderName;
+
+            /// <summary>Which title is displayed for the window.</summary>
+            public WindowTitle Title;
+
+            /// <summary>Rectangle that defines the window frame.</summary>
+            public Rect FrameRect;
+
+            /// <summary>Creation timestamp of the window.</summary>
+            public DateTimeOffset CreationDate;
+
+            /// <summary>Last modification timestamp of the window.</summary>
+            public DateTimeOffset ModificationDate;
+        }
+
+
         /// <summary>A worksheet book (workbook) assembled from the dataset names of its columns.</summary>
         /// <param name="Name">The book name, which is the part before the last underscore of a dataset name.</param>
         /// <param name="Label">The book label. Not recovered yet, therefore always <see langword="null"/>.</param>
         /// <param name="Sheets">The sheets of the book, addressable by their one-based sheet number.</param>
-        public record Book(string? Name, string? Label, IReadOnlyList<Sheet> Sheets)
+        public class Book : Window
         {
-            /// <summary>Gets or sets the project tree path of the folder the book is stored in; empty when unresolved.</summary>
-            public string FolderName { get; set; } = string.Empty;
-            /// <summary>Gets or sets the long name of the book; empty when it was not recovered.</summary>
-            public string LongName { get; set; } = string.Empty;
-            /// <summary>Gets or sets the comment of the book; empty when it was not recovered.</summary>
-            public string Comment { get; set; } = string.Empty;
+            public IReadOnlyList<Sheet> Sheets { get; set; } = Array.Empty<Sheet>();
+        }
+
+        /// <summary>A simple note window containing text.</summary>
+        public class Note : Window
+        {
+            /// <summary>Text content of the note.</summary>
+            public string Text;
+
+
+        }
+
+        public class Graph : Window
+        {
+        }
+
+        /// <summary>Represents a matrix window containing one or more sheets.</summary>
+        public class Matrix : Window
+        {
+            /// <summary>
+            /// Defines the supported header display modes for a matrix.
+            /// </summary>
+            public enum HeaderViewType
+            {
+                /// <summary>Show column and row headers.</summary>
+                ColumnRow,
+
+                /// <summary>Show X and Y headers.</summary>
+                XY
+            };
+
+            /// <summary>Index of the active sheet in the matrix.</summary>
+            public int ActiveSheet;
+
+            /// <summary>Header view type used by the matrix.</summary>
+            public HeaderViewType Header;
+
+            /// <summary>Sheets that belong to this matrix.</summary>
+            public List<MatrixSheet> Sheets = [];
+
+            /// <summary>Initializes a new instance of <see cref="Matrix"/>.</summary>
+            public Matrix()
+            {
+                ActiveSheet = 0;
+                Header = HeaderViewType.ColumnRow;
+            }
         }
 
 
@@ -48,102 +121,98 @@ namespace Altaxo.Serialization.Origin
         /// <param name="Number">The one-based sheet number within the book.</param>
         /// <param name="RowCount">The number of rows. Not recovered yet, therefore always <see langword="null"/>.</param>
         /// <param name="Columns">The columns of the sheet in file order.</param>
-        public record Sheet(int Number, int? RowCount, IReadOnlyList<AbstractColumn> Columns)
+        public record Sheet(int Number, int? RowCount, IReadOnlyList<SpreadColumn> Columns)
         {
             /// <summary>Gets or sets the sheet name; empty when it was not recovered.</summary>
             public string Name { get; set; } = string.Empty;
         }
 
-        /// <summary>
-        /// Base class of a worksheet dataset (column) recovered from the project stream.
-        /// </summary>
-        public abstract class AbstractColumn
-        {
-            /// <summary>Initializes a new instance of the <see cref="AbstractColumn"/> class.</summary>
-            /// <param name="datasetName">The dataset name as stored in the file.</param>
-            /// <param name="descriptorRecords">The records that make up the dataset header.</param>
-            protected AbstractColumn(string datasetName, IReadOnlyList<IRecord> descriptorRecords)
-            {
-                DatasetName = datasetName;
-                DescriptorRecords = descriptorRecords;
-            }
 
-            /// <summary>Gets the raw dataset name, e.g. <c>Book1_A</c> for sheet 1 or <c>Book1_A@2</c> for sheet 2.</summary>
-            public string DatasetName { get; }
-            /// <summary>Gets or sets the column name part of the dataset name; <see langword="null"/> while the book and sheet could not be resolved.</summary>
-            public string? Name { get; set; }
-            /// <summary>Gets the records that form the dataset header, from the first recognized header record up to the value block envelope.</summary>
-            public IReadOnlyList<IRecord> DescriptorRecords { get; }
-            // Null means the values have not been decoded, not that the column is empty.
-            /// <summary>Gets the decoded cell values, or <see langword="null"/> when the value block was not decoded.</summary>
-            public IReadOnlyList<Variant>? Values { get; init; }
 
-            /// <summary>Gets or sets the role of the column in a plot; <see cref="SpreadColumnType.Ignore"/> when unresolved.</summary>
-            public SpreadColumnType SpreadColumnType { get; set; } = SpreadColumnType.Ignore;
-
-            /// <summary>Gets or sets the declared value type of the column; <see langword="null"/> when unresolved.</summary>
-            public ValueType? ValueType { get; set; }
-
-            /// <summary>Gets or sets the data type the value block was decoded as; <see langword="null"/> when the block was not decoded.</summary>
-            public DeserializedDataType? DeserializedDataType { get; set; }
-            /// <summary>Gets or sets the long name of the column; empty when not recovered.</summary>
-            public string LongName { get; set; } = string.Empty;
-            /// <summary>Gets or sets the unit of the column; empty when not recovered or not present.</summary>
-            public string Unit { get; set; } = string.Empty;
-            /// <summary>Gets or sets the comment of the column; empty when not recovered or not present.</summary>
-            public string Comment { get; set; } = string.Empty;
-            /// <summary>Gets or sets the display width in column units; 0 when not recovered.</summary>
-            public double Width { get; set; }
-            /// <summary>Gets or sets the format of the column values; <see cref="ValueTypeSpecification.Numeric_Decimal"/> when unresolved.</summary>
-            public ValueTypeSpecification ValueTypeSpecification { get; set; }
-
-            /// <summary>Gets or sets the records that carry the column designation and value type; <see langword="null"/> when not recovered.</summary>
-            internal IReadOnlyList<IRecord>? TypeDescriptorRecords { get; set; }
-
-        }
-
-        /// <summary>A worksheet dataset whose value block is introduced by a 24 byte envelope record.</summary>
-        public sealed class DatasetColumn : AbstractColumn
-        {
-            /// <summary>Initializes a new instance of the <see cref="DatasetColumn"/> class.</summary>
-            /// <param name="datasetName">The dataset name as stored in the file.</param>
-            /// <param name="elementWidth">The element width byte of the width record that introduced the dataset.</param>
-            /// <param name="descriptorRecords">The records that make up the dataset header.</param>
-            /// <param name="dataStartRecord">The record in which the value block starts.</param>
-            /// <param name="dataOffset">The byte offset of the value block within the file.</param>
-            /// <param name="candidateDataLength">The element count announced by the envelope, when the envelope carries one.</param>
-            /// <param name="candidateData">The bytes the scanner could provide for the value block.</param>
-            public DatasetColumn(string datasetName, byte elementWidth, IReadOnlyList<IRecord> descriptorRecords,
-                IRecord dataStartRecord, int dataOffset, ulong? candidateDataLength, ReadOnlyMemory<byte>? candidateData)
-                : base(datasetName, descriptorRecords)
-            {
-                ElementWidth = elementWidth;
-                DataStartRecord = dataStartRecord;
-                DataOffset = dataOffset;
-                CandidateDataLength = candidateDataLength;
-                CandidateData = candidateData;
-            }
-
-            /// <summary>Gets the element width byte: 1, 2, 4, 8, 16, 50 or 10 (text/numeric) select the value block layout.</summary>
-            internal byte ElementWidth { get; }
-            /// <summary>Gets the record in which the value block starts.</summary>
-            internal IRecord DataStartRecord { get; }
-            /// <summary>Gets the file offset of the value block, i.e. the offset just behind the envelope's two byte block prefix.</summary>
-            internal int DataOffset { get; }
-            /// <summary>Gets the element count announced by the envelope, or <see langword="null"/> when the envelope does not carry one.</summary>
-            internal ulong? CandidateDataLength { get; }
-            // The length and bytes are hypotheses; neither establishes a native block boundary.
-            /// <summary>Gets the bytes the scanner made available for the value block, or <see langword="null"/> when they were not available.</summary>
-            internal ReadOnlyMemory<byte>? CandidateData { get; }
-            /// <summary>Gets the number of rows the value block was decoded to, or <see langword="null"/> when it was not decoded.</summary>
-            internal int? DataRowCount { get; init; }
-        }
 
         /// <summary>A matrix dataset together with the dimensions inferred from the surrounding records.</summary>
         /// <param name="Name">The dataset name of the matrix.</param>
         /// <param name="NumberOfRows">The inferred row count, or <see langword="null"/> when it could not be inferred.</param>
         /// <param name="NumberOfColumns">The inferred column count, or <see langword="null"/> when it could not be inferred.</param>
         private sealed record MatrixCandidate(string Name, int? NumberOfRows, int? NumberOfColumns);
+
+
+        /// <summary>A notes window located by the record carrying its name and by the text block behind it.</summary>
+        /// <param name="Offset">The file offset of the record that carries the window name.</param>
+        /// <param name="Name">The name of the notes window.</param>
+        /// <param name="LongName">The long name of the notes window.</param>
+        /// <param name="Comment">The comment behind the long name, or <see langword="null"/> when the text holds none.</param>
+        /// <param name="Text">The content of the note behind the comment.</param>
+        private sealed record NoteWindowCandidate(int Offset, string Name, string LongName, string? Comment, string Text);
+
+
+        /// <summary>
+        /// Represents a single column of a worksheet: its recovered metadata, the raw encoded data of its value
+        /// block, and the cell values decoded from that block.
+        /// </summary>
+        /// <remarks>
+        /// Every member is unresolved right after construction and is filled in only by the parser pass that proves it.
+        /// A member that cannot be proven stays <see langword="null"/> when its type offers no value meaning
+        /// "unknown", which is the case for <see cref="ValueType"/>, <see cref="DeserializedDataType"/>, the row count
+        /// and the decoded values. Members whose type does have a neutral value keep that value instead:
+        /// <see cref="SpreadColumnType.Ignore"/> for an unknown plot role, <see cref="ValueTypeSpecification.Numeric_Decimal"/>
+        /// for an unknown format, the empty string for an unknown text and 0 for an unknown number or display width.
+        /// </remarks>
+        public class SpreadColumn : Altaxo.Serialization.Origin.SpreadColumn
+        {
+            /// <summary>Initializes a new instance of <see cref="SpreadColumn"/> with every member unresolved.</summary>
+            /// <param name="name">Name of the column; empty while the column has no resolved dataset name.</param>
+            /// <param name="index">Index of the column within its sheet.</param>
+            public SpreadColumn(string name = "", int index = 0)
+            {
+                Name = name;
+                Index = index;
+                // The display settings below are the defaults Origin applies to a column whose format records are missing.
+                SignificantDigits = 6;
+                DecimalPlaces = 6;
+                NumericDisplayType = NumericDisplayType.DefaultDecimalDigits;
+            }
+
+            /// <summary>Initializes a new instance from a dataset located in the project stream, keeping its raw data.</summary>
+            /// <param name="datasetName">The dataset name as stored in the file, e.g. <c>Book1_A</c> for sheet 1 or <c>Book1_A@2</c> for sheet 2.</param>
+            /// <param name="elementWidth">The element width byte of the width record that introduced the dataset.</param>
+            /// <param name="descriptorRecords">The records that make up the dataset header.</param>
+            /// <param name="dataStartRecord">The record in which the value block starts.</param>
+            /// <param name="dataOffset">The byte offset of the value block within the file, i.e. just behind the envelope's two byte block prefix.</param>
+            /// <param name="candidateDataLength">The element count announced by the envelope, when the envelope carries one.</param>
+            /// <param name="candidateData">The bytes the scanner could provide for the value block.</param>
+            public SpreadColumn(string datasetName, byte elementWidth, IReadOnlyList<IRecord> descriptorRecords,
+                IRecord dataStartRecord, int dataOffset, ulong? candidateDataLength, ReadOnlyMemory<byte>? candidateData)
+                : this()
+            {
+                DatasetName = datasetName;
+                ElementWidth = elementWidth;
+                DescriptorRecords = descriptorRecords;
+                DataStartRecord = dataStartRecord;
+                DataOffset = dataOffset;
+                CandidateDataLength = candidateDataLength;
+                CandidateData = candidateData;
+            }
+
+
+            // The members below keep the raw, partly unproven view of the dataset so that a later pass, or a later
+            // investigation, can re-examine the bytes the value block was decoded from.
+            /// <summary>Gets the element width byte: 1, 2, 4, 8, 16, 50 or 10 (text/numeric) select the value block layout.</summary>
+            internal byte ElementWidth { get; init; }
+            /// <summary>Gets the records that form the dataset header, from the first recognized header record up to the value block envelope.</summary>
+            internal IReadOnlyList<IRecord> DescriptorRecords { get; init; }
+            /// <summary>Gets the record in which the value block starts.</summary>
+            internal IRecord? DataStartRecord { get; init; }
+            /// <summary>Gets the file offset of the value block, i.e. the offset just behind the envelope's two byte block prefix.</summary>
+            internal int DataOffset { get; init; }
+            /// <summary>Gets the element count announced by the envelope, or <see langword="null"/> when the envelope does not carry one.</summary>
+            internal ulong? CandidateDataLength { get; init; }
+            // The length and bytes are hypotheses; neither establishes a native block boundary.
+            /// <summary>Gets the bytes the scanner made available for the value block, or <see langword="null"/> when they were not available.</summary>
+            internal ReadOnlyMemory<byte>? CandidateData { get; init; }
+            /// <summary>Gets or sets the records that carry the column designation and value type; <see langword="null"/> when not recovered.</summary>
+            internal IReadOnlyList<IRecord>? TypeDescriptorRecords { get; set; }
+        }
 
     }
 }

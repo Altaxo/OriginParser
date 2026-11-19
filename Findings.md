@@ -269,6 +269,13 @@ a window record is a resynchronization point for gap loops. The child records ar
 available through `WindowRecord.Children`, not as top-level entries of `Records`, so passes that scan
 `Records` cannot see them.
 
+**Window types:** a window candidate is a matrix when its name matches exactly one matrix dataset
+candidate, a graph when its description holds the application marker in the graph form (see the graph
+section below), and a worksheet in every other case. A notes window is not a window candidate at all,
+because its description carries no name field (see the notes section below). `ApplyMatrixAndGraphWindows`
+and `ApplyNoteWindows` model the windows that are not worksheets, and `ApplyWindowFolders` gives all of
+them the folder path of their project tree entry.
+
 ---
 
 ## Long name and comment of a window
@@ -285,6 +292,17 @@ hold `Ächt\r\nThis is the first window, a worksheet\0`. A window without a comm
 candidate or the next indexed preview image) for that marker. A book receives the metadata only when
 its name occurs exactly once among the books and once among the windows, and when the area contains
 exactly one decodable long name.
+
+**General form:** the long marker above ends with the six bytes `8B 04 FF 7F 00 00`, and those six bytes
+are the *end of the window description itself* — the trailing block always closes with a record
+`<0x8B|0x9B> 04 FF 7F 00 00`. Of the 253 window descriptions of the corpus, 224 end that way (221 with
+tag `0x8B`, 3 with tag `0x9B`), and 220 of them are followed by a decodable long name block. The 33
+descriptions that match neither rule belong to windows without a long name (e.g. `Book1` of
+`OneWorksheet.opju`, `MBook1` of `Matrix137x179.opju`). The long name of a matrix or graph window is
+therefore read from the block directly behind its description, behind the closing record of the trailing
+block; the marker in front of it is not the same for every window type (`8C 01 48 8B 04 FF 7F 00 00` for
+a worksheet, `9B 04 FF 7F 00 00` for the matrix `Aachen`, `8B 01 60 8B 04 FF 7F 00 00` for the graph
+`Valencia`), which is why only the six closing bytes and the block behind the record are matched there.
 
 ---
 
@@ -319,6 +337,11 @@ from the dataset names (`Book1_A`) of their columns.
 the marker `80 06 04 DE 36 10 03 89` with a preceding little-endian `uint32` native length. It is the
 only place that stores the folder of a window.
 
+In a project that holds no preview image at all, the block is searched for from the `PrvwOPJU` marker
+record on, because there is no last image to start behind. In `NumberOfWindows\OneNote.opju` the marker
+record ends at `0x53` and the tree block starts at `0x21F` with the native length 279, in
+`TwoNotes.opju` it starts at `0x31F` with the native length 427; both files hold only notes windows.
+
 **Shape of a folder entry:** `80 <header length>` `TLV` whose payload begins with a variable type
 prefix (`01 04 8C 10`, `03 00 00 01 8A 10` or `8D 10`) followed by the parent GUID and the folder's
 own GUID; then `00`, `uint32` name length, `0A`, the NUL-terminated name, the folder marker
@@ -333,27 +356,132 @@ record, a terminating zero byte — while the value differs:
 |---|---|
 | `80 01 85` | The window with ordinal 0 (short form). |
 | `80 04 81 01 <ordinal> 80` | The window with the given ordinal. |
-| `80 05 03 00 00 10 82` | Unknown; observed once, in the folder of a *notes* window. |
+| `80 05 03 00 00 10 82` | A *notes* window. Behind the first byte is the 24 bit little-endian value `00 00 10`, i.e. the file type `0x100000` that the legacy `.opj` project tree uses for notes windows; the leading byte (here `03`) is an object id whose meaning is not established. |
+| `80 07 05 00 00 10 00 01 80` | A notes window of the same form with two additional bytes (here the id is `05`). |
 
-The ordinals refer to the window candidates of `FindWindowCandidates` in file order.
+The ordinals refer to the window candidates of `FindWindowCandidates` in file order, and — because a
+notes window lies between them in the file — to the notes windows as well. Corpus statistics over the
+212 files whose tree parses: 210 entries of the short form, 15 entries with an explicit ordinal
+(`81 01 01 80` 9x, `81 01 02 80` 5x, `81 01 03 80` 1x) and 5 notes entries; no other form occurs.
 
-**Parser:** `TryReadFolder` parses the generic entry framing so that an entry of unknown form is
-skipped rather than rejecting the whole tree — only entries of the two known forms contribute an
-ordinal. The tree is accepted only when it parses without leftovers and assigns every window candidate
-exactly once; `ApplyWorksheetFolders` then still applies a path only to a book whose name is unique
-among books and windows.
+A notes entry contributes no ordinal of its own. The ordinal is recovered by elimination: the ordinals
+that no other file entry uses are exactly the positions the notes windows have in the file order of all
+windows, and the tree is only accepted when both sets are equal (see the notes section below).
+
+**Notes entries and notes windows correspond one to one:** the corpus holds 5 notes entries in 4 files
+and exactly 5 notes windows, and the files are the same. `NumberOfWindows\OneEmptyWorksheet_OneMatrix.opju`
+shows what happens to the tree entry when a notes window is deleted: the `_README.txt` of that fixture
+reports the deleted notes window `Lenja`, and neither the window nor a notes entry is left - the tree of
+that file holds only the two entries `81 01 01 80` in `Mömmern\Döra` and `85` in `München`, and no byte of
+the name `Lenja`, the long name `Kassel` or the note text occurs anywhere in the file, neither in UTF-8
+nor in UTF-16. A notes entry can therefore be read as evidence that a notes window exists.
+
+**Parser:** `TryReadFolder` parses the generic entry framing, so an entry of an unknown form is skipped
+rather than rejecting the whole tree; only the entries of a known form contribute an ordinal or a notes
+path. `TryReadProjectTree` locates the block and accepts it only when it parses without leftovers and
+lists every window exactly once - a notes entry counts as a listed window only when a notes window was
+actually recognized, and the tree is rejected as a whole when the free ordinals are not exactly the
+positions of the notes windows. As a safety net for a notes window that escapes recognition, the block is
+then read a second time with the notes entries ignored, which keeps the folders of the other windows
+readable; no file of the corpus needs that second pass. `ApplyWindowFolders` applies a path to the book,
+matrix or graph whose name is unique among the window candidates and among the modeled windows.
 
 ---
 
 ## Notes windows use a different description
 
-`OneEmptyWorksheet_OneNote.opju` holds the notes window `Lenja` at `0x22B4`, starting with `80 43`
-(length 67). Its payload does *not* start with `<field length> 00 00 <name>`; the name sits inside the
-child record `93 06 "Lenja"`, which overflows the declared length (comparable to the known
-`PrvwOPJU` short-length special case). Behind the record follows `68` (104) and then
-`Kassel\r\n<comment>\n<note content>\0`. Notes windows are therefore not recognized as window
-candidates and not modeled as books; only the tree entry form above was generalized, because a single
-fixture does not establish the notes layout.
+**Where:** a notes window description does not carry its name in a name field. In
+`NumberOfWindows\OneNote.opju` the description of `Lenja` starts at `0xFB` with `80 3F` (length 63) and
+its payload begins `01 1A 80 01 1A` instead of `<field length> 00 00 <name>`, so `TryReadWindowRecord`
+does not recognize it and the description stays inside an unknown region. The name is carried by the
+record `93 06 "Lenja\0"` at `0x13B`, whose tag byte is the last byte inside the declared length of the
+description — the declared length is one byte too long, comparable to the known `PrvwOPJU` short-length
+special case.
+
+**Shape:** behind the name record follows `0A <length> <text> 00 0A`, where the length counts the text
+bytes and the terminating NUL. The text holds the long name, the comment and the content of the note:
+`Kassel\r\nThis is the note window L_e_n_j_a\nThis is content inside the notes window:\r\nHere a second
+line.`. Long name and comment are separated by `\r\n` as in every other window type; the content starts
+behind a line feed that is *not* preceded by a carriage return. The name record tag is `0x93` in three
+fixtures and `0x96` in `OneEmptyWorksheet_OneMatrixOneWorksheetOneNote.opju`.
+
+**Recognition:** the sequence `<93|96> <len> <printable name> 00 0A <len> <text> 00 0A` was searched for
+throughout the corpus: it matches exactly the five notes windows that exist there and nothing else. The
+description itself is not used for recognition, because its child run is not stable — the record holding
+the modification date is a plain `TLV` in some fixtures (`80 10 <creation> <modification>`, `80 11 ...`)
+and starts with the non-tag bytes `C0 55` in others, which cuts the child run short and would make a
+child-count rule unusable.
+
+**Window ordinal:** the project tree lists the notes window without an ordinal (see the section above).
+The ordinal is recovered by elimination: the ordinals that no other file entry uses must be exactly the
+positions the notes windows have in the file order of all windows, and the tree is accepted only when
+both sets are equal. In `OneEmptyWorksheet_OneMatrixOneWorksheetOneNote.opju` the explicit entries use
+0, 1 and 2 for `Aachen`, `Mira` and `Biro`, leaving 3 for `Lenja`, which is the fourth window in the file.
+The notes entries of the tree are paired with the notes windows in the order the tree lists them and the
+file holds them; in `TwoNotes.opju` that is `Lenja` before `Lissabon`, which is the file order.
+
+**A notes window leaves its tree entry behind when it is deleted:** the tree of
+`OneEmptyWorksheet_OneMatrix.opju` holds no notes entry at all, although the fixture was made by deleting
+the notes window `Lenja` (see the project tree section above). The 5 notes entries of the corpus therefore
+belong to the 5 notes windows one to one, which is what makes the elimination rule and the pairing by
+order reliable.
+
+**Parser:** `FindNoteWindowCandidates` collects the notes windows by the signature above and decodes
+name, long name, comment and content; `ApplyNoteWindows` builds a `Note` for every one of them, and
+`ApplyWindowFolders` gives them the folder path of their tree entry. Notes windows are not added to
+`FindWindowCandidates`, because the passes that use the record index of a window candidate (sheet names,
+column widths, book metadata) cannot work with a description that is not a parsed record.
+
+---
+
+## Graph windows
+
+**Where:** the child records of the window description. Every window description of the corpus (253 of
+them) holds a child that carries the ASCII text `ORIGIN`, the name of the application that wrote the
+project.
+
+**Shape:** for a worksheet or a matrix that child is
+`83 0D 05 00 04 00 02 11 11 4F 52 49 47 49 4E` — tag `0x83`, length `0x0D`, the text behind a seven byte
+prefix. For a graph it is `81 06 4F 52 49 47 49 4E` — tag `0x81`, length 6, the text alone. 251 of the
+253 descriptions use the first form; the two that use the second are the graph windows `Valencia` in
+`NumberOfWindows\OneGraph.opju` and `NumberOfWindows\OneEmptyWorksheet_OneGraph.opju`. A graph
+description differs in two further children: its third child is `82 04 20 19 3B 13` where a worksheet or
+matrix has `81 01 20`, and the record that holds the two dates is `85 11 <creation> <modification>`
+where the others have `86 10 <creation> <modification>`.
+
+**Parser:** `IsGraphWindowRecord` requires the `ORIGIN` child to have tag `0x81` and payload exactly
+`ORIGIN`, and rejects the description when any child of tag `0x83` ends with `ORIGIN`. The first child
+tag of a description cannot be used for this: it ranges over `0x89`..`0x95` for worksheets and matrices
+and is `0x8E` for the graph, but `0x8E` also occurs for the matrix `MComplex`.
+
+---
+
+## Matrix windows and the name of a matrix sheet
+
+**Where:** a matrix window is announced by its matrix dataset — the name record that is followed by the
+matrix type marker `90 02 CA 50` or `CA 51` (see `FindMatrixDatasetCandidates`). The tag of that name
+record is `0x95`, `0x96` or `0x97`; `0x96` was not accepted before and occurs twice in the corpus, both
+times for the matrix `Aachen` of the `NumberOfWindows` fixtures.
+
+**Shape of a matrix sheet description:** the sheet of the three `NumberOfWindows` matrices ends with
+
+```
+81 01 06 | 90 08 <8 bytes> | 89 01 25 | 80 01 F7 | C0 FF 8E 04 FF 01 00 04 A4 09 <name> 0A 00 10 01
+```
+
+which is the sheet-with-columns signature of a worksheet (`TryReadWorksheetSheetName`) with the ordinal
+marker `84 01 07` replaced by `81 01 06` and the `88 08 <8 bytes>` record replaced by
+`90 08 <8 bytes>`. The name block framing is identical. The signature occurs three times in the corpus,
+in the three matrix fixtures of `NumberOfWindows`, and always names the sheet `Maßricht`; the value `25`
+behind `89 01` is not interpreted. The matrix sheets of the other matrix fixtures (`MBook1`, `MReal`,
+...) are not described this way — their names are only visible through the `94 FF FF 01 00` sheet-name
+signature — so a matrix window without such a sheet description keeps an empty sheet list.
+
+**Parser:** `TryReadMatrixSheetName` reads the signature above from the records of the window area of a
+matrix window; `ApplyMatrixAndGraphWindows` creates a `Matrix` for a window whose name matches exactly one
+matrix dataset candidate, and gives it the sheets found in its window area. A matrix window is not turned
+into a `Book`, because it has no columns: `AddWindowOnlyBooks` only accepts the sheet-without-columns
+signature of a worksheet, which a matrix sheet description does not match.
 
 ---
 

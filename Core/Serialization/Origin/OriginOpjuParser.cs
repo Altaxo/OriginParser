@@ -28,6 +28,7 @@ using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Text;
 
 namespace Altaxo.Serialization.Origin
@@ -54,6 +55,9 @@ namespace Altaxo.Serialization.Origin
 
         /// <summary>The matrix dimensions inferred by <see cref="FindMatrixDatasetCandidates"/>; kept for later use.</summary>
         private IReadOnlyList<MatrixCandidate> _matrixCandidates = [];
+
+        /// <summary>The notes windows located by <see cref="FindNoteWindowCandidates"/>, in file order.</summary>
+        private IReadOnlyList<NoteWindowCandidate> _noteWindows = [];
 
         /// <summary>Gets the format version from the file header.</summary>
         public string FormatVersion { get; private set; }
@@ -91,8 +95,23 @@ namespace Altaxo.Serialization.Origin
         /// <summary>Gets the books resolved from the worksheet dataset names, in the order the datasets occur in the file.</summary>
         public IReadOnlyList<Book> Books { get; }
 
+        /// <summary>
+        /// Gets the matrices.
+        /// </summary>
+        public List<Matrix> Matrices { get; set; } = [];
+
+        /// <summary>
+        /// Gets the graphs.
+        /// </summary>
+        public List<Graph> Graphs { get; set; } = [];
+
+        /// <summary>
+        /// Gets the notes.
+        /// </summary>
+        public List<Note> Notes { get; set; } = [];
+
         /// <summary>Gets the datasets whose names do not follow the Book_Column@Sheet pattern and therefore have no resolved owner.</summary>
-        internal IReadOnlyList<AbstractColumn> UnassociatedColumns { get; }
+        internal IReadOnlyList<SpreadColumn> UnassociatedColumns { get; }
 
         /// <summary>Reads an OPJU project from the beginning of a stream without closing it.</summary>
         /// <param name="originFile">A readable, seekable stream containing the project.</param>
@@ -123,7 +142,14 @@ namespace Altaxo.Serialization.Origin
             Books = AddWindowOnlyBooks(books);
             ApplyWorksheetSheetNames();
             ApplyWorksheetColumnWidths();
-            ApplyWorksheetBookMetadata();
+            var windows = FindWindowCandidates();
+            _noteWindows = FindNoteWindowCandidates();
+            ApplyWorksheetBookMetadata(windows);
+            // The window types that are not worksheets are modeled once the worksheet books are complete, so that a
+            // matrix window can be recognized by its matrix dataset and the project tree can number all windows.
+            ApplyMatrixAndGraphWindows(windows);
+            ApplyNoteWindows();
+            ApplyWindowFolders(windows);
         }
 
         // ----- Interpretation passes: worksheet books, sheets and their columns -----
@@ -138,9 +164,9 @@ namespace Altaxo.Serialization.Origin
         /// name when its name occurs exactly once among the books and among the windows, and when the area contains
         /// exactly one decodable long name.
         /// </remarks>
-        private void ApplyWorksheetBookMetadata()
+        /// <param name="windows">The window candidates in file order.</param>
+        private void ApplyWorksheetBookMetadata(List<(int Index, string Name)> windows)
         {
-            var windows = FindWindowCandidates();
             ReadOnlySpan<byte> longNameMarker = [0x80, 0x01, 0xfc, 0xc0, 0xff, 0x02, 0x00, 0x39, 0x8c, 0x01, 0x48, 0x8b, 0x04, 0xff, 0x7f, 0x00, 0x00];
             for (int w = 0; w < windows.Count; ++w)
             {
@@ -208,30 +234,147 @@ namespace Altaxo.Serialization.Origin
                         book.Comment = comment;
                 }
             }
-
-            ApplyWorksheetFolders(windows);
         }
 
         /// <summary>
-        /// Applies the folder path of the project tree to the books listed in it.
+        /// Applies the folder path of the project tree to every window it lists, including the notes windows.
         /// </summary>
         /// <remarks>
-        /// The project tree refers to the book windows by their ordinal within <paramref name="windows"/>. The tree is
-        /// accepted only when it parses without leftovers and assigns every window exactly once; the path is then still
-        /// applied to a book only if that book and its window are uniquely named.
+        /// The project tree refers to the windows by their ordinal within the file order of all windows, so the notes
+        /// windows take part in the numbering although their description is not a parsed record. The tree is accepted
+        /// only when it parses without leftovers, when it lists every window exactly once, and when the ordinals that
+        /// no explicit entry uses are exactly the positions of the notes windows. The notes entries themselves carry no
+        /// ordinal, so they are paired with the notes windows in the order the tree lists them and the file holds them.
+        /// If that fails - for example because a notes window was not recognized - the tree is read a second time
+        /// without the notes windows, which is how the folder of a book was determined before. The path is applied to a
+        /// book only if that book and its window are uniquely named.
         /// </remarks>
-        /// <param name="windows">The window candidates in file order.</param>
-        private void ApplyWorksheetFolders(List<(int Index, string Name)> windows)
+        /// <param name="windows">The window candidates of <see cref="FindWindowCandidates"/> in file order.</param>
+        private void ApplyWindowFolders(List<(int Index, string Name)> windows)
         {
-            // The project-tree block follows the final indexed preview and has a bounded native length.
+            // The ordinal of a window is its position in the file order of all windows, notes windows included.
+            var allWindows = new List<(int Offset, int WindowIndex, int NoteIndex)>();
+            for (int i = 0; i < windows.Count; ++i)
+                allWindows.Add((Records[windows[i].Index].Offset, i, -1));
+            for (int i = 0; i < _noteWindows.Count; ++i)
+                allWindows.Add((_noteWindows[i].Offset, -1, i));
+            allWindows.Sort(static (a, b) => a.Offset.CompareTo(b.Offset));
+
+            var resolved = TryReadProjectTree(allWindows.Count, true, out var noteEntryPaths);
+            if (resolved is not null && !AreNoteOrdinalsConsistent(resolved, allWindows, noteEntryPaths.Count))
+                resolved = null;
+            if (resolved is null)
+            {
+                allWindows.RemoveAll(static entry => entry.WindowIndex < 0);
+                resolved = TryReadProjectTree(allWindows.Count, false, out noteEntryPaths);
+                if (resolved is null)
+                    return;
+            }
+
+            foreach (var entry in resolved)
+            {
+                if (allWindows[entry.Key].WindowIndex < 0)
+                    continue;
+                string name = windows[allWindows[entry.Key].WindowIndex].Name;
+                int windowCount = 0;
+                foreach (var window in windows)
+                    if (window.Name == name)
+                        ++windowCount;
+                if (windowCount != 1)
+                    continue;
+
+                // The path belongs to the book, matrix or graph of that name, which has to be unique as well.
+                Window? target = null;
+                int targetCount = 0;
+                foreach (var candidate in Books)
+                    if (candidate.Name == name)
+                    {
+                        target = candidate;
+                        ++targetCount;
+                    }
+                foreach (var candidate in Matrices)
+                    if (candidate.Name == name)
+                    {
+                        target = candidate;
+                        ++targetCount;
+                    }
+                foreach (var candidate in Graphs)
+                    if (candidate.Name == name)
+                    {
+                        target = candidate;
+                        ++targetCount;
+                    }
+                if (targetCount == 1)
+                    target!.FolderName = entry.Value;
+            }
+
+            // The ordinals that no explicit entry uses belong to the notes windows, in the order the tree lists them.
+            int noteOrdinal = 0;
+            for (int i = 0; i < allWindows.Count && noteOrdinal < noteEntryPaths.Count; ++i)
+            {
+                if (resolved.ContainsKey(i) || allWindows[i].NoteIndex < 0)
+                    continue;
+                Notes[allWindows[i].NoteIndex].FolderName = noteEntryPaths[noteOrdinal];
+                ++noteOrdinal;
+            }
+        }
+
+        /// <summary>
+        /// Checks that the ordinals left free by the explicit tree entries are exactly the positions of the notes
+        /// windows, which is the only way a notes entry of the tree can be attributed to a notes window.
+        /// </summary>
+        /// <param name="assignments">The ordinal to path mapping of the explicit entries.</param>
+        /// <param name="allWindows">All windows in file order, with the index of the window candidate or of the notes window.</param>
+        /// <param name="noteEntryCount">The number of notes entries the tree holds.</param>
+        /// <returns><see langword="true"/> if both agree on the number and the positions of the notes windows.</returns>
+        private bool AreNoteOrdinalsConsistent(Dictionary<int, string> assignments,
+            IReadOnlyList<(int Offset, int WindowIndex, int NoteIndex)> allWindows, int noteEntryCount)
+        {
+            if (noteEntryCount != _noteWindows.Count)
+                return false;
+            int freeOrdinals = 0;
+            for (int i = 0; i < allWindows.Count; ++i)
+            {
+                if (assignments.ContainsKey(i))
+                    continue;
+                if (allWindows[i].NoteIndex < 0)
+                    return false;
+                ++freeOrdinals;
+            }
+            return freeOrdinals == _noteWindows.Count;
+        }
+
+        /// <summary>
+        /// Locates the project tree block and reads its folder entries.
+        /// </summary>
+        /// <remarks>
+        /// The block follows the final indexed preview image, or the preview marker when the project has no images at
+        /// all, and has a bounded native length. It is accepted only when it parses without leftovers and lists
+        /// <paramref name="windowCount"/> windows exactly once. When <paramref name="countNoteEntries"/> is set, a
+        /// notes entry counts as one of the listed windows.
+        /// </remarks>
+        /// <param name="windowCount">The number of windows the tree has to list.</param>
+        /// <param name="countNoteEntries"><see langword="true"/> to count the notes entries, <see langword="false"/> to ignore them.</param>
+        /// <param name="noteEntryPaths">Receives the path of every notes entry, in the order the tree lists them.</param>
+        /// <returns>The ordinal to path mapping of the explicit entries, or <see langword="null"/> when the tree is unreadable or ambiguous.</returns>
+        private Dictionary<int, string>? TryReadProjectTree(int windowCount, bool countNoteEntries, out List<string> noteEntryPaths)
+        {
+            noteEntryPaths = [];
             int afterImages = 0;
             foreach (var record in Records)
                 if (record is PngRecord)
                     afterImages = Math.Max(afterImages, record.NextOffset);
             if (afterImages == 0)
-                return;
+            {
+                // A project that holds no worksheet or matrix window has no preview image at all, so its tree block
+                // is searched for from the preview marker on, which is written even in that case.
+                foreach (var record in Records)
+                    if (record is TLVRecord preview && preview.Payload.Span.StartsWith("PrvwOPJU"u8))
+                        afterImages = preview.NextOffset;
+            }
+            if (afterImages == 0)
+                return null;
             ReadOnlySpan<byte> treeMarker = [0x80, 0x06, 0x04, 0xde, 0x36, 0x10, 0x03, 0x89];
-            var assignments = new Dictionary<int, string>();
             Dictionary<int, string>? resolved = null;
             for (int start = afterImages + 5; start <= _fileData.Length - treeMarker.Length; ++start)
             {
@@ -242,9 +385,11 @@ namespace Altaxo.Serialization.Origin
                     continue;
                 int end = start + (int)length - 4;
                 int position = start + treeMarker.Length;
-                assignments.Clear();
-                if (!TryReadFolder(ref position, end, string.Empty, true, 0, assignments, windows.Count) ||
-                    assignments.Count != windows.Count || position > end || end - position > 3)
+                var assignments = new Dictionary<int, string>();
+                var notes = new List<string>();
+                if (!TryReadFolder(ref position, end, string.Empty, true, 0, assignments, notes, windowCount) ||
+                    assignments.Count + (countNoteEntries ? notes.Count : 0) != windowCount ||
+                    position > end || end - position > 3)
                     continue;
                 bool trailingZeros = true;
                 for (int i = position; i < end; ++i)
@@ -252,29 +397,251 @@ namespace Altaxo.Serialization.Origin
                 if (!trailingZeros)
                     continue;
                 if (resolved is not null)
-                    return;
-                resolved = new Dictionary<int, string>(assignments);
+                    return null;
+                resolved = assignments;
+                noteEntryPaths = notes;
             }
-            if (resolved is null)
-                return;
-            foreach (var entry in resolved)
+            return resolved;
+        }
+
+        /// <summary>
+        /// Creates a <see cref="Matrix"/> or a <see cref="Graph"/> for every window candidate that is neither of them.
+        /// </summary>
+        /// <remarks>
+        /// A matrix window is recognized by its matrix dataset: the window name must occur exactly once among the
+        /// matrix dataset candidates. A graph window is recognized by the child record of its description that carries
+        /// the application marker (see <see cref="IsGraphWindowRecord"/>). Every other window candidate is left to the
+        /// worksheet passes, so a window whose type cannot be established stays unmodelled rather than being guessed.
+        /// </remarks>
+        /// <param name="windows">The window candidates of <see cref="FindWindowCandidates"/> in file order.</param>
+        private void ApplyMatrixAndGraphWindows(List<(int Index, string Name)> windows)
+        {
+            for (int w = 0; w < windows.Count; ++w)
             {
-                string name = windows[entry.Key].Name;
-                int windowCount = 0;
-                int bookCount = 0;
-                Book? book = null;
-                foreach (var window in windows)
-                    if (window.Name == name)
-                        ++windowCount;
-                foreach (var candidate in Books)
-                    if (candidate.Name == name)
-                    {
-                        book = candidate;
-                        ++bookCount;
-                    }
-                if (windowCount == 1 && bookCount == 1)
-                    book!.FolderName = entry.Value;
+                if (Records[windows[w].Index] is not WindowRecord window)
+                    continue;
+                bool isMatrix = IsMatrixWindowName(windows[w].Name);
+                if (!isMatrix && !IsGraphWindowRecord(window))
+                    continue;
+
+                Window target = isMatrix ? new Matrix() : new Graph();
+                target.Name = windows[w].Name;
+                if (TryReadWindowLongName(window, out var longName, out var comment))
+                {
+                    target.LongName = longName;
+                    if (comment is not null)
+                        target.Comment = comment;
+                }
+
+                if (!isMatrix)
+                {
+                    Graphs.Add((Graph)target);
+                    continue;
+                }
+
+                // The sheets of a matrix are described inside the window area, which ends at the next window.
+                var matrix = (Matrix)target;
+                int end = w + 1 < windows.Count ? windows[w + 1].Index : Records.Count;
+                for (int i = windows[w].Index + 1; i < end; ++i)
+                    if (TryReadMatrixSheetName(i, out var sheetName))
+                        matrix.Sheets.Add(new MatrixSheet(sheetName.Name, matrix.Sheets.Count + 1));
+                Matrices.Add(matrix);
             }
+        }
+
+        /// <summary>Creates a <see cref="Note"/> for every notes window that was located.</summary>
+        private void ApplyNoteWindows()
+        {
+            foreach (var candidate in _noteWindows)
+            {
+                Notes.Add(new Note
+                {
+                    Name = candidate.Name,
+                    LongName = candidate.LongName,
+                    Comment = candidate.Comment ?? string.Empty,
+                    Text = candidate.Text
+                });
+            }
+        }
+
+        /// <summary>
+        /// Checks whether the window with the given name is the window of a matrix, which is the case when the name
+        /// occurs exactly once among the matrix dataset candidates.
+        /// </summary>
+        /// <param name="name">The name of the window.</param>
+        /// <returns><see langword="true"/> if exactly one matrix dataset carries that name.</returns>
+        private bool IsMatrixWindowName(string name)
+        {
+            int count = 0;
+            foreach (var candidate in MatrixDatasetCandidates)
+                if (candidate.Text == name)
+                    ++count;
+            return count == 1;
+        }
+
+        /// <summary>
+        /// Checks whether a window description belongs to a graph window.
+        /// </summary>
+        /// <param name="window">The window description to inspect.</param>
+        /// <returns><see langword="true"/> if the description holds the application marker in the graph form.</returns>
+        /// <remarks>
+        /// Every window description holds a child record with the ASCII text <c>ORIGIN</c>, the name of the
+        /// application that wrote the project. A worksheet or a matrix stores it in a <c>0x83</c> record behind a
+        /// seven byte prefix; a graph stores it in a <c>0x81</c> record that holds nothing but the text. Of the 253
+        /// window descriptions of the corpus, 251 use the first form and the two graph windows use the second.
+        /// </remarks>
+        private static bool IsGraphWindowRecord(WindowRecord window)
+        {
+            bool isGraph = false;
+            foreach (var child in window.Children)
+            {
+                var payload = child.Payload.Span;
+                if (payload.Length < 6 || !payload.EndsWith("ORIGIN"u8))
+                    continue;
+                if (child.Tag == 0x83)
+                    return false;
+                if (child.Tag == 0x81 && payload.Length == 6)
+                    isGraph = true;
+            }
+            return isGraph;
+        }
+
+        /// <summary>
+        /// Reads the long name and the comment of a window from the text block directly behind its description.
+        /// </summary>
+        /// <param name="window">The window description whose trailing block is inspected.</param>
+        /// <param name="longName">Receives the long name of the window.</param>
+        /// <param name="comment">Receives the comment behind the line break, or <see langword="null"/> when there is none.</param>
+        /// <returns><see langword="true"/> if the block was found and its text decodes.</returns>
+        /// <remarks>
+        /// The trailing block of a window description always closes with the record <c>0x8B 04 FF 7F 00 00</c> or
+        /// <c>0x9B 04 FF 7F 00 00</c>, and the marker in front of it differs between the window types. Therefore only
+        /// the closing record is matched, and the text block is read from the first byte behind the description. A
+        /// window without a long name has no such block.
+        /// </remarks>
+        private bool TryReadWindowLongName(WindowRecord window, out string longName, out string? comment)
+        {
+            longName = string.Empty;
+            comment = null;
+            int end = window.NextOffset;
+            if (end - window.Offset < 6 || _fileData[end - 1] != 0 || _fileData[end - 2] != 0 ||
+                _fileData[end - 3] != 0x7f || _fileData[end - 4] != 0xff || _fileData[end - 5] != 0x04 ||
+                (_fileData[end - 6] != 0x8b && _fileData[end - 6] != 0x9b))
+                return false;
+
+            // Behind the description follows <length> <text> 00 0A, where the length counts the terminating NUL byte.
+            int lengthOffset = end;
+            if (lengthOffset + 1 >= _fileData.Length)
+                return false;
+            int length = _fileData[lengthOffset];
+            if (length < 2 || lengthOffset + length + 1 >= _fileData.Length ||
+                _fileData[lengthOffset + length] != 0 || _fileData[lengthOffset + length + 1] != 0x0a)
+                return false;
+            var textBytes = _fileData.AsSpan(lengthOffset + 1, length - 1);
+            if (textBytes.Contains((byte)0))
+                return false;
+            string text;
+            try
+            {
+                text = new UTF8Encoding(false, true).GetString(textBytes);
+            }
+            catch (DecoderFallbackException)
+            {
+                return false;
+            }
+            int lineBreak = text.IndexOf("\r\n", StringComparison.Ordinal);
+            longName = lineBreak < 0 ? text : text[..lineBreak];
+            comment = lineBreak < 0 ? null : text[(lineBreak + 2)..];
+            return longName.Length > 0;
+        }
+
+        /// <summary>
+        /// Collects the notes windows of the project.
+        /// </summary>
+        /// <returns>The notes windows in file order.</returns>
+        /// <remarks>
+        /// The description of a notes window carries no name field and is therefore not a <see cref="WindowRecord"/>.
+        /// The window is located by the record that carries its name together with the text block behind it, which
+        /// holds long name, comment and content. Throughout the corpus this signature matches the five existing notes
+        /// windows and nothing else. The single length byte of the text block limits the note content to 254 bytes;
+        /// longer notes are not observed.
+        /// </remarks>
+        private IReadOnlyList<NoteWindowCandidate> FindNoteWindowCandidates()
+        {
+            var notes = new List<NoteWindowCandidate>();
+            for (int offset = 0; offset + 4 < _fileData.Length; ++offset)
+                if (TryReadNoteWindow(offset, out var note))
+                    notes.Add(note);
+            return notes.AsReadOnly();
+        }
+
+        /// <summary>
+        /// Tries to read a notes window at the given offset, where the record carrying its name is expected.
+        /// </summary>
+        /// <param name="offset">The offset of the record that is expected to carry the window name.</param>
+        /// <param name="note">Receives the recovered name, long name, comment and content of the note.</param>
+        /// <returns><see langword="true"/> if the notes signature was matched and the text decoded.</returns>
+        private bool TryReadNoteWindow(int offset, [NotNullWhen(true)] out NoteWindowCandidate? note)
+        {
+            note = null;
+            byte tag = _fileData[offset];
+            if (tag != 0x93 && tag != 0x96)
+                return false;
+
+            // The name record holds the ASCII name of the window followed by a NUL byte.
+            int nameLength = _fileData[offset + 1];
+            if (nameLength < 3 || nameLength > 0x40 || offset + 2 + nameLength + 2 >= _fileData.Length ||
+                _fileData[offset + 1 + nameLength] != 0)
+                return false;
+            var nameBytes = _fileData.AsSpan(offset + 2, nameLength - 1);
+            foreach (var b in nameBytes)
+                if (b < 0x20 || b >= 0x7f)
+                    return false;
+
+            // Behind the name record the marker 0x0a introduces the text block, whose length counts the NUL byte.
+            int lengthOffset = offset + 2 + nameLength;
+            if (_fileData[lengthOffset] != 0x0a)
+                return false;
+            int textLength = _fileData[lengthOffset + 1];
+            int textStart = lengthOffset + 2;
+            if (textLength < 2 || textStart + textLength >= _fileData.Length ||
+                _fileData[textStart + textLength - 1] != 0 || _fileData[textStart + textLength] != 0x0a)
+                return false;
+            var textBytes = _fileData.AsSpan(textStart, textLength - 1);
+            if (textBytes.Contains((byte)0))
+                return false;
+            string text;
+            try
+            {
+                text = new UTF8Encoding(false, true).GetString(textBytes);
+            }
+            catch (DecoderFallbackException)
+            {
+                return false;
+            }
+
+            // Long name and comment are separated by a carriage return plus line feed as in every other window type.
+            // The content of the note starts behind a line feed that is not preceded by a carriage return.
+            string longName = text;
+            string? comment = null;
+            string content = string.Empty;
+            int lineBreak = text.IndexOf("\r\n", StringComparison.Ordinal);
+            if (lineBreak >= 0)
+            {
+                longName = text[..lineBreak];
+                string rest = text[(lineBreak + 2)..];
+                int contentStart = -1;
+                for (int i = 0; i < rest.Length; ++i)
+                    if (rest[i] == '\n' && (i == 0 || rest[i - 1] != '\r'))
+                    {
+                        contentStart = i;
+                        break;
+                    }
+                comment = contentStart < 0 ? rest : rest[..contentStart];
+                content = contentStart < 0 ? string.Empty : rest[(contentStart + 1)..];
+            }
+            note = new NoteWindowCandidate(offset, Encoding.ASCII.GetString(nameBytes), longName, comment, content);
+            return true;
         }
 
         /// <summary>
@@ -286,10 +653,11 @@ namespace Altaxo.Serialization.Origin
         /// <param name="root"><see langword="true"/> for the invisible root entry, whose own name is not part of the path.</param>
         /// <param name="depth">Current recursion depth, limited so that a corrupted block cannot recurse endlessly.</param>
         /// <param name="assignments">Receives the file ordinal to folder path mapping; a duplicate ordinal rejects the block.</param>
+        /// <param name="noteEntries">Receives the path of every entry that belongs to a notes window instead of to an ordinal.</param>
         /// <param name="windowCount">The number of window candidates, which bounds the number of files of a folder.</param>
         /// <returns><see langword="true"/> if the folder entry was read completely; otherwise, <see langword="false"/>.</returns>
         private bool TryReadFolder(ref int position, int end, string parent, bool root, int depth,
-            Dictionary<int, string> assignments, int windowCount)
+            Dictionary<int, string> assignments, List<string> noteEntries, int windowCount)
         {
             if (depth > 64 || position + 2 > end || _fileData[position] != 0x80)
                 return false;
@@ -344,10 +712,11 @@ namespace Altaxo.Serialization.Origin
             for (int i = 0; i < fileCount; ++i)
             {
                 // Every file entry consists of a zero byte, a single value record and a terminating zero byte. The
-                // value record either carries the window ordinal explicitly (0x81 01 <ordinal> 80) or is the short
-                // form of the entry of the window with ordinal 0 (0x85). Other window types, a notes window for
-                // example, use a value record whose meaning is not known; their entries are recognized so that the
-                // following entries and sub folders stay readable, but they contribute no assignment.
+                // value record either carries the window ordinal explicitly (0x81 01 ordinal 80) or is the short
+                // form of the entry of the window with ordinal 0 (0x85). A notes window is listed without an ordinal:
+                // behind a leading byte its value holds the 24 bit little-endian value 00 00 10, which is the file
+                // type 0x100000 that the legacy project tree uses for notes windows. Such an entry contributes the
+                // path of its folder only; its ordinal is recovered from the ordinals that no other entry uses.
                 // The byte behind the last entry is the number of sub folders.
                 if (end - position < 4 || _fileData[position] != 0 || _fileData[position + 1] != 0x80)
                     return false;
@@ -356,12 +725,17 @@ namespace Altaxo.Serialization.Origin
                     return false;
                 var value = _fileData.AsSpan(position + 3, valueLength);
                 int ordinal = -1;
+                bool isNoteEntry = false;
                 if (valueLength == 1 && value[0] == 0x85)
                     ordinal = 0;
                 else if (valueLength == 4 && value[0] == 0x81 && value[1] == 0x01 && value[3] == 0x80)
                     ordinal = value[2];
+                else if (valueLength >= 5 && value[1] == 0 && value[2] == 0 && value[3] == 0x10)
+                    isNoteEntry = true;
                 if (ordinal >= 0 && (ordinal >= windowCount || !assignments.TryAdd(ordinal, path)))
                     return false;
+                if (isNoteEntry)
+                    noteEntries.Add(path);
                 position += 4 + valueLength;
             }
             if (position >= end || (_fileData[position] & 1) != 0)
@@ -371,7 +745,7 @@ namespace Altaxo.Serialization.Origin
                 return false;
             // The sub folders follow and extend the path of their parent.
             for (int i = 0; i < folderCount; ++i)
-                if (!TryReadFolder(ref position, end, path, false, depth + 1, assignments, windowCount))
+                if (!TryReadFolder(ref position, end, path, false, depth + 1, assignments, noteEntries, windowCount))
                     return false;
             return true;
         }
@@ -417,7 +791,7 @@ namespace Altaxo.Serialization.Origin
                 }
 
                 if (isColumnlessWorksheet)
-                    result.Add(new Book(windows[w].Name, null, sheets));
+                    result.Add(new Book { Name = windows[w].Name, Sheets = sheets });
             }
             return result;
         }
@@ -500,7 +874,7 @@ namespace Altaxo.Serialization.Origin
                         break;
                     }
 
-                var columns = new List<AbstractColumn>();
+                var columns = new List<SpreadColumn>();
                 foreach (var sheet in book.Sheets)
                     columns.AddRange(sheet.Columns);
                 if (columns.Count == 0)
@@ -510,8 +884,8 @@ namespace Altaxo.Serialization.Origin
                 // the format code 0x60 there, some use 0x20. Where 0x20 is used the long layout is not
                 // present, so the two variants are collected separately and the one that adds up to the
                 // number of columns wins.
-                var widths = new List<double>();
-                var widthsWithShortFormat20 = new List<double>();
+                var widths = new List<ushort>();
+                var widthsWithShortFormat20 = new List<ushort>();
                 for (int i = windows[windowIndex].Index + 1; i + 1 < end; ++i)
                 {
                     if (Records[i] is TLVRecord shortPrefix && shortPrefix.Tag == 0x8f &&
@@ -530,10 +904,10 @@ namespace Altaxo.Serialization.Origin
                         {
                             if (shortPrefix.Payload.Span[0] == 0x60)
                             {
-                                widths.Add(shortEncodedWidth / 10.0);
+                                widths.Add(shortEncodedWidth);
                                 ++i;
                             }
-                            widthsWithShortFormat20.Add(shortEncodedWidth / 10.0);
+                            widthsWithShortFormat20.Add(shortEncodedWidth);
                         }
                         if (shortPrefix.Payload.Span[0] == 0x60)
                             continue;
@@ -568,7 +942,7 @@ namespace Altaxo.Serialization.Origin
                         ? width.Payload.Span[0]
                         : BinaryPrimitives.ReadUInt16LittleEndian(width.Payload.Span);
                     if (encodedWidth > 0)
-                        widths.Add(encodedWidth / 10.0);
+                        widths.Add(encodedWidth);
                 }
 
                 if (widths.Count != columns.Count)
@@ -578,7 +952,7 @@ namespace Altaxo.Serialization.Origin
                     widths = widthsWithShortFormat20;
                 }
                 for (int i = 0; i < columns.Count; ++i)
-                    columns[i].Width = widths[i];
+                    columns[i].Widthx10 = widths[i];
             }
         }
 
@@ -588,12 +962,12 @@ namespace Altaxo.Serialization.Origin
         /// <param name="columns">The located datasets in file order.</param>
         /// <returns>The books in order of first occurrence, and the datasets whose names carry no resolvable owner.</returns>
         /// <remarks>The grouping is derived from the dataset names alone; it is not confirmed by the file structure.</remarks>
-        private static (IReadOnlyList<Book> Books, IReadOnlyList<AbstractColumn> UnassociatedColumns) GroupWorksheetDatasets(
-            IReadOnlyList<AbstractColumn> columns)
+        private static (IReadOnlyList<Book> Books, IReadOnlyList<SpreadColumn> UnassociatedColumns) GroupWorksheetDatasets(
+            IReadOnlyList<SpreadColumn> columns)
         {
-            var groups = new Dictionary<string, Dictionary<int, List<AbstractColumn>>>(StringComparer.Ordinal);
+            var groups = new Dictionary<string, Dictionary<int, List<SpreadColumn>>>(StringComparer.Ordinal);
             var bookOrder = new List<string>();
-            var unassociated = new List<AbstractColumn>();
+            var unassociated = new List<SpreadColumn>();
             foreach (var column in columns)
             {
                 if (!TryParseWorksheetDatasetName(column.DatasetName, out var bookName, out var columnName, out int sheetNumber))
@@ -604,13 +978,13 @@ namespace Altaxo.Serialization.Origin
 
                 if (!groups.TryGetValue(bookName, out var sheets))
                 {
-                    sheets = new Dictionary<int, List<AbstractColumn>>();
+                    sheets = new Dictionary<int, List<SpreadColumn>>();
                     groups.Add(bookName, sheets);
                     bookOrder.Add(bookName);
                 }
                 if (!sheets.TryGetValue(sheetNumber, out var sheetColumns))
                 {
-                    sheetColumns = new List<AbstractColumn>();
+                    sheetColumns = new List<SpreadColumn>();
                     sheets.Add(sheetNumber, sheetColumns);
                 }
                 column.Name = columnName;
@@ -624,10 +998,10 @@ namespace Altaxo.Serialization.Origin
                 int sheetCount = 0;
                 foreach (var entry in groups[bookName])
                 {
-                    sheets.Add(entry.Key, new Sheet(entry.Key, null, entry.Value.AsReadOnly()));
+                    sheets.Add(entry.Key, new Sheet(entry.Key, null, entry.Value));
                     sheetCount = Math.Max(sheetCount, entry.Key);
                 }
-                books.Add(new Book(bookName, null, new NumberedSheets(sheetCount, sheets)));
+                books.Add(new Book { Name = bookName, Sheets = new NumberedSheets(sheetCount, sheets) });
             }
             return (books.AsReadOnly(), unassociated.AsReadOnly());
         }
@@ -714,9 +1088,9 @@ namespace Altaxo.Serialization.Origin
         /// envelope. Everything accepted here is a candidate: the envelope announces a length hypothesis, it does not
         /// establish a native block boundary.
         /// </remarks>
-        private IReadOnlyList<AbstractColumn> FindWorksheetDatasetCandidates()
+        private IReadOnlyList<SpreadColumn> FindWorksheetDatasetCandidates()
         {
-            var columns = new List<AbstractColumn>();
+            var columns = new List<SpreadColumn>();
             for (int i = 0; i + 4 < Records.Count; ++i)
             {
                 // A dataset starts with the width record that announces the element width of its value block.
@@ -829,7 +1203,7 @@ namespace Altaxo.Serialization.Origin
                     var populatedValues = new Variant[populatedExtent];
                     for (int row = 0; row < populatedExtent; ++row)
                         populatedValues[row] = mixedValues[row];
-                    values = Array.AsReadOnly(populatedValues);
+                    values = populatedValues.ToList();
                 }
                 else if (width.Payload.Span[0] == 8 && candidateData is { } encoded && encoded.Length == 4 &&
                     encoded.Span[0] == 0x05 && encoded.Span[1] > 0 &&
@@ -840,7 +1214,7 @@ namespace Altaxo.Serialization.Origin
                     dataRowCount = encoded.Span[1];
                     var emptyValues = new Variant[dataRowCount.Value];
                     Array.Fill(emptyValues, new Variant(double.NaN));
-                    values = Array.AsReadOnly(emptyValues);
+                    values = emptyValues.ToList();
                 }
                 else if (dataType == DeserializedDataType.Double && candidateData is { } numericData &&
                     TryDecodeDoubleValueBlock(numericData.Span, out var decoded))
@@ -865,13 +1239,15 @@ namespace Altaxo.Serialization.Origin
                     values = textValues;
                     candidateData = textData;
                 }
-                columns.Add(new DatasetColumn(name, width.Payload.Span[0], descriptorRecords.AsReadOnly(),
+                columns.Add(new SpreadColumn(name, width.Payload.Span[0], descriptorRecords.AsReadOnly(),
                     Records[dataRecordIndex], dataOffset, candidateLength, candidateData)
                 {
-                    DataRowCount = dataRowCount,
-                    Values = values,
-                    SpreadColumnType = columnType,
-                    DeserializedDataType = dataType
+                    // An undecoded value block leaves the row count and the values unassigned, which keeps them
+                    // distinguishable from a value block that was decoded to zero rows.
+                    NumRows = dataRowCount ?? 0,
+                    Data = values?.ToList() ?? new List<Variant>(),
+                    ColumnType = columnType,
+                    DeserializedDataType = dataType ?? DeserializedDataType.Unknown,
                 });
                 i = envelopeIndex;
             }
@@ -887,7 +1263,7 @@ namespace Altaxo.Serialization.Origin
         /// by their order of occurrence, so the assignment is skipped entirely when the number of fields does not equal
         /// the number of datasets.
         /// </remarks>
-        private void ApplyWorksheetColumnLongnames(IReadOnlyList<AbstractColumn> columns)
+        private void ApplyWorksheetColumnLongnames(IReadOnlyList<SpreadColumn> columns)
         {
             var longnames = new List<string>();
             var units = new List<string>();
@@ -1028,7 +1404,7 @@ namespace Altaxo.Serialization.Origin
         /// designations equals the number of datasets and every designation carries the expected ordinal and column
         /// name; otherwise a single rejected designation would shift all remaining ones onto the wrong columns.
         /// </remarks>
-        private void ApplyWorksheetColumnDesignations(IReadOnlyList<AbstractColumn> columns)
+        private void ApplyWorksheetColumnDesignations(IReadOnlyList<SpreadColumn> columns)
         {
             if (columns.Count == 0)
                 return;
@@ -1178,9 +1554,9 @@ namespace Altaxo.Serialization.Origin
             for (int i = 0; i < columns.Count; ++i)
             {
                 // Scanner gaps can hide a numeric dataset header; use validated worksheet metadata in that case.
-                if (candidates[i].ApplyDesignation || columns[i].SpreadColumnType == SpreadColumnType.Ignore)
-                    columns[i].SpreadColumnType = candidates[i].Type;
-                columns[i].ValueType = candidates[i].ValueType;
+                if (candidates[i].ApplyDesignation || columns[i].ColumnType == SpreadColumnType.Ignore)
+                    columns[i].ColumnType = candidates[i].Type;
+                columns[i].ValueType = candidates[i].ValueType ?? throw new InvalidDataException("Value type is null.");
                 if (candidates[i].ValueTypeSpecification is { } specification)
                     columns[i].ValueTypeSpecification = specification;
                 columns[i].TypeDescriptorRecords = candidates[i].Records;
@@ -2266,15 +2642,27 @@ namespace Altaxo.Serialization.Origin
             // 0xa4 record (c0 ff 8e 04 ff 01 00 04 a4 <len> <name> 0a 00 10 01), or it is short and introduces a
             // 0xa6 record (c0 ff 8e 02 ff 01 a6 <len> <name> 0a 00 10 01). Therefore only the framing is matched and
             // both records are parsed.
-            int offset = nameOffset;
-            if (!TryCopyRecordBytes(nameIndex, offset, 4, out var header) ||
+            return TryReadSheetNameBlock(nameIndex, nameOffset, out candidate);
+        }
+
+        /// <summary>
+        /// Reads the name of a sheet from the name block that follows the records announcing the sheet.
+        /// </summary>
+        /// <param name="nameIndex">The index of the record in which the name block starts.</param>
+        /// <param name="nameOffset">The file offset of the first byte of the name block.</param>
+        /// <param name="candidate">The recovered sheet name together with its file offset.</param>
+        /// <returns><see langword="true"/> if the name block is complete and its name decodes.</returns>
+        private bool TryReadSheetNameBlock(int nameIndex, int nameOffset, [NotNullWhen(true)] out SheetNameCandidate? candidate)
+        {
+            candidate = null;
+            if (!TryCopyRecordBytes(nameIndex, nameOffset, 4, out var header) ||
                 !header.AsSpan(0, 3).SequenceEqual(new byte[] { 0xc0, 0xff, 0x8e }) ||
                 header[3] < 2 || header[3] > 8)
                 return false;
 
             // Index of the tag byte of the name record, relative to the start of the name block.
             int nameTag = 4 + header[3];
-            if (!TryCopyRecordBytes(nameIndex, offset, nameTag + 2, out var framing) ||
+            if (!TryCopyRecordBytes(nameIndex, nameOffset, nameTag + 2, out var framing) ||
                 !framing.AsSpan(4, 2).SequenceEqual(new byte[] { 0xff, 0x01 }) ||
                 (framing[nameTag] != 0xa4 && framing[nameTag] != 0xa6) ||
                 framing[nameTag + 1] == 0)
@@ -2282,7 +2670,7 @@ namespace Altaxo.Serialization.Origin
 
             int nameStart = nameTag + 2;
             int nameLength = framing[nameTag + 1];
-            if (!TryCopyRecordBytes(nameIndex, offset, nameStart + nameLength + 4, out var encoded) ||
+            if (!TryCopyRecordBytes(nameIndex, nameOffset, nameStart + nameLength + 4, out var encoded) ||
                 !encoded.AsSpan(nameStart + nameLength, 4).SequenceEqual(new byte[] { 0x0a, 0, 0x10, 1 }))
                 return false;
             string name;
@@ -2299,8 +2687,37 @@ namespace Altaxo.Serialization.Origin
             foreach (char character in name)
                 if (char.IsControl(character))
                     return false;
-            candidate = new SheetNameCandidate(offset + nameStart, name);
+            candidate = new SheetNameCandidate(nameOffset + nameStart, name);
             return true;
+        }
+
+        /// <summary>
+        /// Reads the name of a matrix sheet from the records around the given index.
+        /// </summary>
+        /// <param name="index">The index of the record that carries the one byte value behind the <c>0x89</c> tag.</param>
+        /// <param name="candidate">The recovered sheet name together with its file offset.</param>
+        /// <returns><see langword="true"/> if the records form a matrix sheet name entry; otherwise, <see langword="false"/>.</returns>
+        /// <remarks>
+        /// The framing is the sheet-with-columns signature of a worksheet with two records exchanged: the ordinal
+        /// marker <c>84 01 07</c> is replaced by <c>81 01 06</c> and the <c>88 08</c> record holding eight bytes is
+        /// replaced by a <c>90 08</c> record. The name block behind the <c>80 01 F7</c> marker is identical. The
+        /// signature occurs three times in the corpus, always in the window area of a matrix window; the value behind
+        /// the <c>0x89</c> tag is not interpreted.
+        /// </remarks>
+        private bool TryReadMatrixSheetName(int index, [NotNullWhen(true)] out SheetNameCandidate? candidate)
+        {
+            candidate = null;
+            if (index < 2 || index + 2 >= Records.Count ||
+                Records[index - 2] is not TLVRecord marker || marker.Tag != 0x81 || marker.Payload.Length != 1 ||
+                Records[index - 1] is not TLVRecord hash || hash.Tag != 0x90 || hash.Payload.Length != 8 ||
+                Records[index] is not TLVRecord columnValue || columnValue.Tag != 0x89 || columnValue.Payload.Length != 1 ||
+                Records[index + 1] is not TLVRecord sheetMarker || sheetMarker.Tag != 0x80 ||
+                !sheetMarker.Payload.Span.SequenceEqual(new byte[] { 0xf7 }))
+                return false;
+            for (int i = index - 2; i <= index + 1; ++i)
+                if (Records[i].NextOffset != Records[i + 1].Offset)
+                    return false;
+            return TryReadSheetNameBlock(index + 2, sheetMarker.NextOffset, out candidate);
         }
 
         /// <summary>Finds possible sheet names in adjacent parsed records matching an observed signature.</summary>
@@ -2349,13 +2766,14 @@ namespace Altaxo.Serialization.Origin
         /// <remarks>Matching dataset, window, and sheet signatures is experimental and does not establish a complete matrix object.</remarks>
         IReadOnlyList<TLVRecord> FindMatrixDatasetCandidates()
         {
-            // Match printable dataset names followed by an observed matrix type marker.
+            // Match printable dataset names followed by an observed matrix type marker. The name record tag is 0x95,
+            // 0x96 or 0x97 depending on the data type of the matrix.
             var matrixCandidates = new List<TLVRecord>();
             var datasetIndices = new List<int>();
             for (int idxRecord = 1; idxRecord < Records.Count; ++idxRecord)
             {
                 if (Records[idxRecord - 1] is TLVRecord candidate && Records[idxRecord] is TLVRecord type &&
-                   (candidate.Tag == 0x95 || candidate.Tag == 0x97) && candidate.Text is not null &&
+                   (candidate.Tag == 0x95 || candidate.Tag == 0x96 || candidate.Tag == 0x97) && candidate.Text is not null &&
                    type.Payload.Length >= 2 && type.Payload.Span[0] == 0xca && (type.Payload.Span[1] == 0x50 || type.Payload.Span[1] == 0x51))
                 {
                     matrixCandidates.Add(candidate);

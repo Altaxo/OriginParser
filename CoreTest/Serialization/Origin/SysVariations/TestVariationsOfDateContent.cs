@@ -34,7 +34,7 @@ namespace Altaxo.Serialization.Origin.SysVariations
 
             Assert.Equal("A", column.Name); // the columns short names are expected to be A, B, C, D, E, F, G, H, I for the first 9 columns
             Assert.Equal(ValueType.Date, column.ValueType); // the expected column types are checked
-            Assert.Equal(SpreadColumnType.Y, column.SpreadColumnType);
+            Assert.Equal(SpreadColumnType.Y, column.ColumnType);
             Assert.Equal(23.5, column.Width, 1E-6); // the columns width is expected to be 23.5 for all columns
             Assert.Equal("DateColumn", column.LongName);
             Assert.Equal("Köln", column.Unit);
@@ -44,16 +44,16 @@ namespace Altaxo.Serialization.Origin.SysVariations
 
             if (expectedValues.Length > 0)
             {
-                Assert.NotNull(column.Values);
+                Assert.NotNull(column.Data);
             }
 
-            if (column.Values is not null)
+            if (column.Data is not null)
             {
 
                 for (int i = 0; i < expectedValues.Length; i++)
                 {
                     var expectedValue = expectedValues[i];
-                    var actualValue = column.Values[i];
+                    var actualValue = column.Data[i];
                     if (double.IsNaN(expectedValue))
                     {
                         Assert.True(actualValue.IsCellEmpty);
@@ -64,9 +64,9 @@ namespace Altaxo.Serialization.Origin.SysVariations
                     }
                 }
 
-                for (int i = expectedValues.Length; i < column.Values.Count; i++)
+                for (int i = expectedValues.Length; i < column.Data.Count; i++)
                 {
-                    var actualValue = column.Values[i];
+                    var actualValue = column.Data[i];
                     Assert.True(actualValue.IsCellEmpty);
                 }
             }

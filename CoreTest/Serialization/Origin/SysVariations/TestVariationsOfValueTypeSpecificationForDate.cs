@@ -32,7 +32,7 @@ namespace Altaxo.Serialization.Origin.SysVariations
             Assert.Equal("A", column.Name); // the columns short names are expected to be A, B, C, D, E, F, G, H, I for the first 9 columns
             Assert.Equal(ValueType.Date, column.ValueType); // the expected column types are checked
             Assert.Equal(expectedValueTypeSpecification, column.ValueTypeSpecification);
-            Assert.Equal(SpreadColumnType.Y, column.SpreadColumnType);
+            Assert.Equal(SpreadColumnType.Y, column.ColumnType);
             Assert.Equal(23.5, column.Width, 1E-6); // the columns width is expected to be 6.7 for all columns
             Assert.Equal("DateColumn", column.LongName);
             Assert.Equal("Köln", column.Unit);
@@ -51,15 +51,15 @@ namespace Altaxo.Serialization.Origin.SysVariations
                 "1948/08/16 12:12:48" };
 
 
-            Assert.NotNull(column.Values);
-            Assert.True(column.Values.Count >= expectedValues.Length);
+            Assert.NotNull(column.Data);
+            Assert.True(column.Data.Count >= expectedValues.Length);
             for (int i = 0; i < expectedValues.Length; i++)
             {
                 var expectedDateValue = DateTime.Parse(expectedValues[i], System.Globalization.CultureInfo.InvariantCulture);
                 var reference = DateTime.Parse("1970/01/01 00:00:00", System.Globalization.CultureInfo.InvariantCulture);
 
                 var expectedValue = 2440587 + (expectedDateValue - reference).TotalDays;
-                var actualValue = column.Values[i];
+                var actualValue = column.Data[i];
 
                 var diff = actualValue - expectedValue;
 
@@ -73,9 +73,9 @@ namespace Altaxo.Serialization.Origin.SysVariations
                 }
             }
 
-            for (int i = expectedValues.Length; i < column.Values.Count; i++)
+            for (int i = expectedValues.Length; i < column.Data.Count; i++)
             {
-                var actualValue = column.Values[i];
+                var actualValue = column.Data[i];
                 Assert.True(actualValue.IsCellEmpty);
             }
         }

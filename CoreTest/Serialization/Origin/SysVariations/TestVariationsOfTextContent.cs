@@ -42,25 +42,25 @@ namespace Altaxo.Serialization.Origin.SysVariations
                 var column = sheet.Columns[iColumn];
                 Assert.Equal("" + (char)('A' + iColumn), column.Name); // the columns short names are expected to be A, B, C, D, E, F, G, H, I for the first 9 columns
                 Assert.Equal(ValueType.Text, column.ValueType); // the expected column types are checked
-                Assert.Equal(iColumn == 0 ? SpreadColumnType.X : SpreadColumnType.Y, column.SpreadColumnType); // the expected column types are checked
+                Assert.Equal(iColumn == 0 ? SpreadColumnType.X : SpreadColumnType.Y, column.ColumnType); // the expected column types are checked
 
                 Assert.Equal(iColumn == 0 ? 16.5 : 31.5, column.Width, 1E-6); // the columns width is expected to be 6.7 for all columns
                 Assert.Empty(column.LongName);
                 Assert.Empty(column.Unit);
                 Assert.Empty(column.Comment);
 
-                Assert.NotNull(column.Values);
-                Assert.True(column.Values.Count >= 30);
+                Assert.NotNull(column.Data);
+                Assert.True(column.Data.Count >= 30);
                 for (int j = 0; j < rows.Length; j++)
                 {
                     if (rows[j] >= 0)
-                        Assert.True(rows[j] < column.Values.Count);
+                        Assert.True(rows[j] < column.Data.Count);
                 }
-                for (int row = 0; row < Math.Min(39, column.Values.Count); row++)
+                for (int row = 0; row < Math.Min(39, column.Data.Count); row++)
                 {
                     int valueIndex = Array.IndexOf(rows, row);
                     var expectedValue = valueIndex < 0 ? string.Empty : (iColumn == 0 ? cA[valueIndex] : cB[valueIndex]);
-                    Assert.Equal(expectedValue, column.Values[row].AsString());
+                    Assert.Equal(expectedValue, column.Data[row].AsString());
                 }
             }
         }

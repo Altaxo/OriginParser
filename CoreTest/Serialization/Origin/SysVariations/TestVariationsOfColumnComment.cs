@@ -37,65 +37,65 @@ namespace Altaxo.Serialization.Origin.SysVariations
             string[] expectedLongnames = { "1 Langname 1", "2 Langname 2", "3 Langname 3", "4 Langname 4", "5 Langname 5" };
             string[] expectedUnits = { "Björnsson", "✨Sparkle✨", "Peñero Pérez", "Café au Lait", "München City" };
 
-            OriginOpjuParser.AbstractColumn column;
+            OriginOpjuParser.SpreadColumn column;
             for (int iColumn = 0; iColumn < 5; iColumn++)
             {
                 column = columns[iColumn];
                 Assert.Equal("" + (char)('A' + iColumn), column.Name);
                 Assert.Equal(expectedValueTypes[iColumn], column.ValueType); // the columns value types are expected to be Numeric, TextNumeric, TextNumeric, TextNumeric, Text for the first 5 columns)
-                Assert.Equal(expectedSpreadColumnTypes[iColumn], column.SpreadColumnType); // the columns spread column types are expected to be X, Z, Y, YErr, Y for the first 5 columns)
+                Assert.Equal(expectedSpreadColumnTypes[iColumn], column.ColumnType); // the columns spread column types are expected to be X, Z, Y, YErr, Y for the first 5 columns)
                 Assert.Equal(expectedLongnames[iColumn], column.LongName);
                 Assert.Equal(expectedUnits[iColumn], column.Unit);
                 Assert.Equal(expectedComments[iColumn], column.Comment);
-                Assert.NotNull(column.Values);
-                Assert.True(column.Values.Count >= 3);
-                for (int j = 3; j < column.Values.Count; j++)
+                Assert.NotNull(column.Data);
+                Assert.True(column.Data.Count >= 3);
+                for (int j = 3; j < column.Data.Count; j++)
                 {
-                    Assert.True(column.Values[j].IsCellEmpty, $"Cell {column.Name}[{j}] contains {column.Values[j]}");
+                    Assert.True(column.Data[j].IsCellEmpty, $"Cell {column.Name}[{j}] contains {column.Data[j]}");
                 }
             }
 
             column = columns[0];
             Assert.Equal(ValueType.Numeric, column.ValueType);
             Assert.Equal(DeserializedDataType.Double, column.DeserializedDataType);
-            Assert.Equal(SpreadColumnType.X, column.SpreadColumnType);
+            Assert.Equal(SpreadColumnType.X, column.ColumnType);
             Assert.Equal(12, column.Width, 1E-6);
-            Assert.Equal(1.0, column.Values[0]);
-            Assert.Equal(2.0, column.Values[1]);
-            Assert.Equal(3.0, column.Values[2]);
+            Assert.Equal(1.0, column.Data[0]);
+            Assert.Equal(2.0, column.Data[1]);
+            Assert.Equal(3.0, column.Data[2]);
 
             column = columns[1];
             Assert.Equal(ValueType.TextNumeric, column.ValueType);
-            Assert.Equal(SpreadColumnType.Z, column.SpreadColumnType);
+            Assert.Equal(SpreadColumnType.Z, column.ColumnType);
             Assert.Equal(14.5, column.Width, 1E-6);
-            Assert.Equal(1.5, column.Values[0]);
-            Assert.Equal(4.5, column.Values[1]);
-            Assert.Equal(7.5, column.Values[2]);
+            Assert.Equal(1.5, column.Data[0]);
+            Assert.Equal(4.5, column.Data[1]);
+            Assert.Equal(7.5, column.Data[2]);
 
 
             column = columns[2];
             Assert.Equal(ValueType.TextNumeric, column.ValueType);
-            Assert.Equal(SpreadColumnType.Y, column.SpreadColumnType);
+            Assert.Equal(SpreadColumnType.Y, column.ColumnType);
             Assert.Equal(9.0, column.Width, 1E-6);
-            Assert.Equal(1E3, column.Values[0]);
-            Assert.Equal(1E6, column.Values[1]);
-            Assert.Equal(1E9, column.Values[2]);
+            Assert.Equal(1E3, column.Data[0]);
+            Assert.Equal(1E6, column.Data[1]);
+            Assert.Equal(1E9, column.Data[2]);
 
             column = columns[3];
             Assert.Equal(ValueType.TextNumeric, column.ValueType);
-            Assert.Equal(SpreadColumnType.YErr, column.SpreadColumnType);
+            Assert.Equal(SpreadColumnType.YErr, column.ColumnType);
             Assert.Equal(18.0, column.Width, 1E-6);
-            Assert.Equal(1E-3, column.Values[0]);
-            Assert.Equal(1E-6, column.Values[1]);
-            Assert.Equal(1E-9, column.Values[2]);
+            Assert.Equal(1E-3, column.Data[0]);
+            Assert.Equal(1E-6, column.Data[1]);
+            Assert.Equal(1E-9, column.Data[2]);
 
             column = columns[4];
             Assert.Equal(ValueType.Text, column.ValueType);
-            Assert.Equal(SpreadColumnType.Y, column.SpreadColumnType);
+            Assert.Equal(SpreadColumnType.Y, column.ColumnType);
             Assert.Equal(17.0, column.Width, 1E-6);
-            Assert.Equal("Müller", column.Values[0]);
-            Assert.Equal("Meier", column.Values[1]);
-            Assert.Equal("Schultze", column.Values[2]);
+            Assert.Equal("Müller", column.Data[0]);
+            Assert.Equal("Meier", column.Data[1]);
+            Assert.Equal("Schultze", column.Data[2]);
         }
     }
 }

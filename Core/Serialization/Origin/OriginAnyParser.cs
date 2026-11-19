@@ -2816,7 +2816,7 @@ namespace Altaxo.Serialization.Origin
             width = 8;
           }
 
-          SpreadSheets[_ispread].Columns[col_index].Width = width;
+          SpreadSheets[_ispread].Columns[col_index].Widthx10 = width;
           byte c1 = (byte)cvehd[0x1E];
           byte c2 = (byte)cvehd[0x1F];
           switch (c1)
@@ -2878,8 +2878,8 @@ namespace Altaxo.Serialization.Origin
             var allComments = _encoding.GetString(cvedt, 0, cvedt.Length).TrimEnd('\0');
             var parts = allComments.Split(['\n'], 3, StringSplitOptions.None);
             if (parts.Length > 0) SpreadSheets[_ispread].Columns[col_index].LongName = parts[0].TrimEnd();
-            if (parts.Length > 1) SpreadSheets[_ispread].Columns[col_index].Units = parts[1].TrimEnd();
-            if (parts.Length > 2) SpreadSheets[_ispread].Columns[col_index].Comments = parts[2].TrimEnd();
+            if (parts.Length > 1) SpreadSheets[_ispread].Columns[col_index].Unit = parts[1].TrimEnd();
+            if (parts.Length > 2) SpreadSheets[_ispread].Columns[col_index].Comment = parts[2].TrimEnd();
           }
           // TODO: check that spreadsheet columns are stored in proper order
           // header.Add(spreadSheets[ispread].columns[col_index]);
@@ -2962,7 +2962,7 @@ namespace Altaxo.Serialization.Origin
               width = 8;
             }
 
-            Excels[_iexcel].Sheets[isheet].Columns[col_index].Width = width;
+            Excels[_iexcel].Sheets[isheet].Columns[col_index].Widthx10 = width;
 
             byte c1 = (byte)cvehd[0x1E];
             byte c2 = (byte)cvehd[0x1F];
@@ -3022,8 +3022,8 @@ namespace Altaxo.Serialization.Origin
               var allComments = _encoding.GetString(cvedt, 0, cvedt.Length).TrimEnd('\0');
               var parts = allComments.Split(new char['\n']);
               if (parts.Length > 0) Excels[_iexcel].Sheets[isheet].Columns[col_index].LongName = parts[0].TrimEnd();
-              if (parts.Length > 1) Excels[_iexcel].Sheets[isheet].Columns[col_index].Units = parts[1].TrimEnd();
-              if (parts.Length > 2) Excels[_iexcel].Sheets[isheet].Columns[col_index].Comments = parts[2].TrimEnd();
+              if (parts.Length > 1) Excels[_iexcel].Sheets[isheet].Columns[col_index].Unit = parts[1].TrimEnd();
+              if (parts.Length > 2) Excels[_iexcel].Sheets[isheet].Columns[col_index].Comment = parts[2].TrimEnd();
             }
           }
         }
