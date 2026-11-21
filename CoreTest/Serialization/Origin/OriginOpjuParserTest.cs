@@ -240,6 +240,59 @@ namespace Altaxo.Serialization.Origin.Tests
         }
 
 
+        /// <summary>Checks that the unnamed parent records of a real project are recognized with their own framing.</summary>
+        /// <remarks>
+        /// The length byte of a parent record counts one byte more than its content, so the record behind a parent
+        /// starts at <c>Offset + 1 + length</c>. The fixture below is the file the hand written analysis in
+        /// <c>RecordParsing.md</c> is based on; the recognized parents are the five dataset descriptions and the five
+        /// column format descriptions of the sheet, plus two further records with the same framing.
+        /// </remarks>
+        [Fact]
+        public void ReadsParentRecordsOfRealProject()
+        {
+            var path = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Serialization", "Origin", "TestFiles", "SysVariations", @"ColumnComment\OneBookOneSheetFiveColumns_A_B_C_D_E.opju");
+            var bytes = File.ReadAllBytes(path);
+            using var stream = new MemoryStream(bytes);
+            var parser = new OriginOpjuParser(stream);
+
+            var parents = parser.Records.OfType<OriginOpjuParser.ParentRecord>().ToArray();
+            Assert.Equal(new int[] { 0xE5, 0x15A, 0x1DB, 0x24F, 0x2D1, 0x58C, 0x974, 0xAAC, 0xB0E, 0xB6D, 0xBCE, 0xC31 }, parents.Select(record => record.Offset).ToArray());
+
+            // A parent record is closed by its last child record, and its children are records of the flat list.
+            Assert.All(parents, parent =>
+            {
+                Assert.Equal((byte)0x80, parent.Tag);
+                Assert.Equal(parent.ContentEnd, parent.Children[^1].NextOffset);
+                Assert.All(parent.Children, child => Assert.Contains(parser.Records, record => record.Offset == child.Offset));
+            });
+
+            var datasetDescription = parents[0];
+            Assert.Equal(0x33, datasetDescription.DeclaredLength);
+            Assert.Equal(0x119, datasetDescription.ContentEnd);
+            Assert.Equal(new byte[] { 0x03, 0x00, 0x00, 0x01 }, datasetDescription.SubHeader.ToArray());
+            Assert.Equal(10, datasetDescription.Children.Count);
+
+            // The byte at the content end is not part of the parent: it is the tag of the value block envelope.
+            var behind = Assert.Single(parser.Records, record => record.Offset == datasetDescription.ContentEnd);
+            Assert.Equal((byte)0x9B, Assert.IsType<OriginOpjuParser.TLVRecord>(behind).Tag);
+
+            var formatDescription = parents[^5];
+            Assert.Equal(0xAAC, formatDescription.Offset);
+            Assert.Equal(0x2F, formatDescription.DeclaredLength);
+            Assert.Equal(new byte[] { 0x01, 0x10 }, formatDescription.SubHeader.ToArray());
+
+            // The parent header occupies only its own bytes, so the body stays an exact partition.
+            int position = parser.BodyOffset + 7;
+            foreach (var record in parser.Records)
+            {
+                Assert.Equal(position, record.Offset);
+                Assert.True(record.NextOffset > record.Offset);
+                position = record.NextOffset;
+            }
+            Assert.Equal(bytes.Length, position);
+        }
+
+
         /// <summary>Checks parsed header fields and candidate record bounds against each real project.</summary>
         /// <param name="fileName">The fixture file name.</param>
         [Theory]
@@ -420,6 +473,37 @@ namespace Altaxo.Serialization.Origin.Tests
             Assert.Equal(header.Length + 7 + 6, gap.Offset);
             Assert.Equal(2, gap.Length);
             Assert.Empty(parser.SheetNameCandidates);
+        }
+
+        /// <summary>Checks that a parent record ends at its content end and not at the end of a plain record of the same length.</summary>
+        [Fact]
+        public void ReadsParentRecordAndKeepsRecordBehindIt()
+        {
+            var header = Encoding.ASCII.GetBytes("CPYUA 4.3380 3\n");
+            // The parent declares 0x0F: its content is 14 bytes wide, i.e. the sub-header 03 00 00 01 and three child
+            // records. The plain candidate rule would end the record one byte later and swallow the record behind it.
+            byte[] body = [0x22, 0x01, 0x6c, 0xc0, 0x11, 0x01, 0x04,
+        0x80, 0x0F, 0x03, 0x00, 0x00, 0x01, 0x80, 0x01, 0x01, 0x81, 0x01, 0x02, 0x82, 0x02, 0x03, 0x04,
+        0x83, 0x01, 0x05];
+            using var stream = new MemoryStream(header.Concat(body).ToArray());
+            var parser = new OriginOpjuParser(stream);
+
+            int parentOffset = header.Length + 7;
+            var parent = Assert.Single(parser.Records.OfType<OriginOpjuParser.ParentRecord>());
+            Assert.Equal(parentOffset, parent.Offset);
+            Assert.Equal((byte)0x80, parent.Tag);
+            Assert.Equal(0x0F, parent.DeclaredLength);
+            Assert.Equal(new byte[] { 0x03, 0x00, 0x00, 0x01 }, parent.SubHeader.ToArray());
+            Assert.Equal(parentOffset + 16, parent.ContentEnd);
+            Assert.Equal(parentOffset + 6, parent.NextOffset);
+
+            // The children are entries of the flat record list, so the parent header is the only part the parent itself covers.
+            Assert.Equal(new int[] { parentOffset + 6, parentOffset + 9, parentOffset + 12 }, parent.Children.Select(record => record.Offset).ToArray());
+            Assert.Equal(5, parser.Records.Count);
+
+            var behind = parser.Records[^1];
+            Assert.Equal(parent.ContentEnd, behind.Offset);
+            Assert.Equal((byte)0x83, Assert.IsType<OriginOpjuParser.TLVRecord>(behind).Tag);
         }
 
         /// <summary>Checks that sheet candidates require complete signatures and printable names.</summary>

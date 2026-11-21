@@ -1,4 +1,7 @@
 <Solution>
+  <Folder Name="/Solution Items/">
+    <File Path="RecordParsing.md" />
+  </Folder>
   <Project Path="Core/AltaxoCore.csproj" />
   <Project Path="CoreTest/AltaxoCoreTest.csproj" />
 </Solution>

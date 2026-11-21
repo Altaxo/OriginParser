@@ -234,10 +234,80 @@ the documented calendar dates rather than copying rounded decimal day counts.
 
 ---
 
+## Parent records (unnamed records that contain child records)
+
+**Where:** one in front of every worksheet dataset and one in front of every column format description.
+In `SysVariations/ColumnComment/OneBookOneSheetFiveColumns_A_B_C_D_E.opju` the description of the first
+column dataset starts at `0xE5` with `80 33`, i.e. tag `0x80` and length byte `0x33` (51), and the five
+column descriptions of that file start at `0xE5`, `0x15A`, `0x1DB`, `0x24F` and `0x2D1`; the five column
+format descriptions start at `0xAAC`, `0xB0E`, `0xB6D`, `0xBCE` and `0xC31`.
+
+**Shape:** `<tag> <length> <sub-header> <child records>`. The first byte of the content is the byte count of
+the sub-header, so `03 00 00 01` is the three byte sub-header `00 00 01`, `01 10` is the one byte sub-header
+`10`, and the record at `0x58C` starts with `0A 00 00 23 C9 02 3D 00 2D 03 A1`, i.e. a ten byte sub-header.
+Behind the sub-header the child records follow directly; byte runs between two children, which carry e.g. the
+doubles of a column description, are kept as gaps.
+
+```
+80 33 | 03 00 00 01 | 80 01 FA | 80 03 A0 0F 01 | ... | 8F 04 C8 10 48 03 | 9B 18 ...
+^  ^    ^     ^      ----------------------------------^                  ^
+|  |    |     +-- sub-header bytes                   content end 0x119     the record
+|  |    +-------- sub-header byte count (three)                            behind the
+|  +------------- length byte, one byte more than the content              parent
++---------------- tag 0x80..0x9F
+```
+
+**Important — the length byte counts one byte too many:** the content of an unnamed parent record ends at
+`offset + 1 + length`, not at `offset + 2 + length` as it does for a plain candidate record. For `80 33` at
+`0xE5` the content is 50 bytes wide and ends at `0x119`, and the byte at `0x119` is already the tag of the
+value block envelope `9B 18`. The named form, the window description, is the exception: its length byte
+counts its content exactly, so `80 77` at `0x362` ends at `0x3DB`.
+
+**Decisive evidence:** a byte pair in the `0x80`..`0x9F` range with a plausible length is only a candidate,
+so the child run decides. A record is accepted as a parent when the run closes the content exactly: the first
+child starts immediately behind the sub-header, every child stays inside the content, and the last child ends
+exactly at the content end. A candidate whose content would end in the middle of a byte run is rejected and
+stays an unknown region.
+
+**Corpus:** the rule holds for every file of the fixture corpus. The parser recognizes 1404 parent records in
+the 212 fixture files, all of them with tag `0x80`, every one closed by a child record, and the record list of
+every file stays an exact partition of the body. The counts behave as expected: a file of the `NumberOfColumns`
+folder with *n* columns holds *2n + 2* parents, i.e. two parents per column, and the file above holds twelve of
+them for its five columns. Two of those twelve, at `0x58C` and `0x974`, were not listed in the hand written
+notes but fit the same framing; their sub-headers start with `0A 00 00 23 …` and `03 00 00 06` instead of the
+`03 00 00 01` of a dataset description or the `01 10` of a format description. Graph object descriptions use the sub-header `01 11`, e.g. the twelve
+records from `0xA56` of `SysVariations/NumberOfWindows/OneGraph.opju`; before parent records were recognized
+those were read as a single plain `TLV` record whose payload held the whole graph object. A few
+parent-shaped candidates are still rejected because their content does not close with a child record, e.g.
+`80 2C 03 00 00 23 …` at `0x87D` and `80 39 0A 00 00 23 …` at `0x8D4` of
+`SysVariations/ColumnWidth/OneBookOneSheetTwoColumns.opju`; their content is not yet understood.
+
+**Length limit:** no parent of the corpus declares more than `0x7F` bytes, and the two candidates that do are
+false positives. The record `81 80 01 30 …` at `0x7CB` of `SysVariations/NumberOfWindows/OneGraph.opju` carries
+a tag that no parent carries anywhere else, and the long child record that keeps its child run together starts
+inside float data: the bytes `00 00 80 3F`, the float 1.0, read as the record `80 3F` with 63 payload bytes.
+That is why `MaxParentLength` stays at `0x7F`.
+
+**Parser:** `TryReadParentRecord` accepts a tag `0x80`..`0x9F` with a length of `4`..`0x7F` whose payload is
+`<sub-header length> <sub-header>` followed by a child run that closes the content. The named form is left to
+`TryReadWindowRecord` (see the next section), because a window description counts its content exactly.
+`ScanRecordStream` tries the parent rule *before* the plain candidate rule, and the start of a parent is also
+a resynchronization point for gap loops, so a parent is never swallowed by a plain record that merely starts
+inside its content. `ParentRecord` occupies only the header and the sub-header while `ContentEnd` marks the
+true end: the children stay entries of the flat `Records` list, which keeps that list an exact partition of
+the body. Passes that reconstruct bytes across a parent header read the tag, the length byte and the
+sub-header bytes through `TryCopyRecordBytes`.
+
+---
+
 ## Window description records (records that contain child records)
 
 **Where:** one record per top-level window. In `SysVariations/NumberOfWindows/OneEmptyWorksheet.opju`
 the worksheet window `Biro` starts at `0xEC` with `80 76`, i.e. tag `0x80` and length `0x76` (118).
+
+A window description is the *named* form of the parent record of the previous section: its content starts with
+a name field instead of a sub-header length byte, and its length byte counts the content exactly, so the record
+ends at `offset + 2 + length` and not at `offset + 1 + length`.
 
 **Shape:** the payload is a name field, a run of child `TLV` records and a short trailing area:
 
@@ -265,9 +335,10 @@ record that was parsed before.
 **Parser:** `TryReadWindowRecord` accepts a tag `0x80`..`0x9F` with length `0x61`..`0x7F` whose
 payload is `<field length> 00 00 <printable ASCII name>`, followed by at least four child records and
 1..32 trailing bytes. `ParseIntoRecords` calls it when the plain `TLV` attempt fails, and the start of
-a window record is a resynchronization point for gap loops. The child records are *nested*: they are
-available through `WindowRecord.Children`, not as top-level entries of `Records`, so passes that scan
-`Records` cannot see them.
+a window record is a resynchronization point for gap loops. The parent rule of the previous section is tried
+before it, but cannot take a window description away, because that rule rejects a payload that starts with a
+name field. The child records are *nested*: they are available through `WindowRecord.Children`, not as
+top-level entries of `Records`, so passes that scan `Records` cannot see them.
 
 **Window types:** a window candidate is a matrix when its name matches exactly one matrix dataset
 candidate, a graph when its description holds the application marker in the graph form (see the graph
@@ -513,3 +584,40 @@ own, so its bytes must not be read as part of the value block.
 **Parser:** `TryDecodeTextDataset` verifies the seven bytes `00 00 00 00 00 0A 00` plus a following
 candidate tag (`0x80`..`0x9F`) against the raw project bytes instead of reading them through the
 records of the block.
+
+---
+
+## The byte count of a value block is stated by the record in front of it
+
+**Where:** the payload of the record with tag `0x9B` or `0x9D` that sits directly behind the worksheet
+dataset descriptor, i.e. the record the parser calls the envelope of the value block.
+
+**Shape:** the payload of that envelope is always 24 bytes. Its first eight bytes are the constant
+`18 00 00 00 00 00 00 00`, and the next eight bytes are a little-endian 64-bit count of the encoded
+value bytes that follow. In `OneBookOneSheetOneDoubleColumnWith7Numbers.opju` the envelope at `0x119`
+announces `41 00 00 00 00 00 00 00`, which is 65: the block starts at `0x134` with the kind byte `05`
+and ends at `0x175`, where the byte `02` begins the region behind the block. The eight bytes behind the
+count are not the length and their meaning is still unknown.
+
+Between the envelope and the block there is exactly one byte, always `0A`. The block itself starts with
+its kind byte `04` or `05`, and the byte directly behind a block of the announced length is `00` or `02`.
+
+The length field is only filled in for the element types that announce their element width in front of
+the envelope. The envelopes of text columns and of single precision columns hold a filler instead, so
+the blocks of those columns cannot be bounded this way and stay unknown regions.
+
+**Parser:** `ScanRecordStream` consumes the block while it scans. Where `TryReadValueBlockBehindEnvelope`
+confirms an announced length — the envelope must sit directly behind a worksheet dataset descriptor, the
+separating byte must be `0A`, the first byte of the block must be `04` or `05`, and the byte behind the block
+must be `00` or `02` — the scan emits the envelope, a one-byte unknown region for the separating `0A`, and a
+single `ValueBlockRecord`, and continues at the end of the block. Doing this during the scan is necessary and
+not merely cosmetic: a block of value bytes is full of coincidental candidate records, and a resynchronization
+loop inside a block steps over the record behind it, which is the parent description of the next dataset.
+
+`MergeValueBlocks` still runs after the record scan as a safety net for the blocks the scan did not bound. It
+applies the same checks (`TryGetValueBlockSpan`) and additionally rejects an announced range that holds an
+image, an image table, a window description or the header of another dataset; where it matches, the candidate
+records and gaps the scanner reported inside the block are replaced by one `ValueBlockRecord`. That record has
+a boundary of its own, so the byte reconstruction in `TryCopyRecordBytes` re-adds no TLV framing for it, and
+the scanner no longer invents TLV records out of value bytes: the spurious `TLV Tag=86` that used to start in
+the middle of the block above is gone.

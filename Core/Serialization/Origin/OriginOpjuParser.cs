@@ -71,15 +71,6 @@ namespace Altaxo.Serialization.Origin
         /// <summary>Gets the seven-byte root header.</summary>
         public ReadOnlyMemory<byte> RootHeader { get; private set; }
 
-        /// <summary>The records built up by <see cref="ParseIntoRecords"/> in ascending offset order.</summary>
-        private List<IRecord> _records = new List<IRecord>();
-
-        /// <summary>
-        /// The maximum payload length a plain candidate record may declare. Longer records are only accepted as
-        /// window descriptions (see <see cref="TryReadWindowRecord"/>), because a longer length byte would make the
-        /// resynchronization after an unknown region unreliable.
-        /// </summary>
-        private const int MaxTLVLength = 0x60;
         /// <summary>The complete project bytes, used where raw byte access is needed instead of the record view.</summary>
         private byte[] _fileData = [];
 
@@ -1329,6 +1320,11 @@ namespace Altaxo.Serialization.Origin
                             if (region.Payload.Span[i] == 0x9a && !TryAddLongnameAt(recordIndex, region.Offset + i))
                                 return;
                         break;
+                    case ValueBlockRecord block:
+                        for (int i = 0; i < block.Payload.Length; ++i)
+                            if (block.Payload.Span[i] == 0x9a && !TryAddLongnameAt(recordIndex, block.Offset + i))
+                                return;
+                        break;
                     case TLVRecord tlv:
                         if (tlv.Tag == 0x9a && !TryAddLongnameAt(recordIndex, tlv.Offset))
                             return;
@@ -2167,23 +2163,32 @@ namespace Altaxo.Serialization.Origin
         /// <returns><see langword="true"/> if the whole range is covered by consecutive copyable records.</returns>
         /// <remarks>
         /// The tag and length byte of a <see cref="TLVRecord"/> are part of the copied data, so a TLV record contributes
-        /// two more bytes than its payload. Image table and PNG records are never copied, because their content does not
-        /// belong to the object stream.
+        /// two more bytes than its payload. A <see cref="ParentRecord"/> contributes its tag, its length byte and its
+        /// sub-header, because only the header of a parent record is a record of its own. Image table and PNG records are
+        /// never copied, because their content does not belong to the object stream. Records that end at or before
+        /// <paramref name="offset"/> are skipped, because the requested range starts behind them.
         /// </remarks>
         private bool TryCopyRecordBytes(int startIndex, int offset, int count, [NotNullWhen(true)] out byte[]? bytes)
         {
             bytes = null;
-            if (count < 0 || startIndex >= Records.Count || offset < Records[startIndex].Offset)
+            if (count < 0)
+                return false;
+
+            int firstIndex = startIndex;
+            while (firstIndex < Records.Count && Records[firstIndex].NextOffset <= offset)
+                ++firstIndex;
+            if (firstIndex >= Records.Count || offset < Records[firstIndex].Offset)
                 return false;
 
             long end = (long)offset + count;
-            int index = startIndex;
+            int index = firstIndex;
             int position = offset;
             while (position < end)
             {
                 if (index >= Records.Count || Records[index].Offset > position || Records[index].NextOffset <= position ||
                     Records[index] is ImageTable or PngRecord ||
-                    (Records[index] is not TLVRecord && Records[index] is not UnknownRegionRecord) ||
+                    (Records[index] is not TLVRecord && Records[index] is not UnknownRegionRecord && Records[index] is not ValueBlockRecord &&
+                     Records[index] is not ParentRecord) ||
                     (Records[index] is TLVRecord preview && preview.Payload.Span.StartsWith("PrvwOPJU"u8)))
                     return false;
                 position = (int)Math.Min(end, Records[index].NextOffset);
@@ -2192,7 +2197,7 @@ namespace Altaxo.Serialization.Origin
 
             bytes = new byte[count];
             position = offset;
-            index = startIndex;
+            index = firstIndex;
             while (position < end)
             {
                 var record = Records[index++];
@@ -2206,384 +2211,17 @@ namespace Altaxo.Serialization.Origin
                         TLVRecord tlv when source == 0 => tlv.Tag,
                         TLVRecord tlv when source == 1 => (byte)tlv.Payload.Length,
                         TLVRecord tlv => tlv.Payload.Span[source - 2],
+                        ParentRecord parent when source == 0 => parent.Tag,
+                        ParentRecord parent when source == 1 => (byte)parent.DeclaredLength,
+                        ParentRecord parent => parent.SubHeader.Span[source - 2],
                         UnknownRegionRecord region => region.Payload.Span[source],
+                        ValueBlockRecord block => block.Payload.Span[source],
                         _ => throw new InvalidDataException("The candidate data crosses an unsupported record.")
                     };
                 }
                 position += length;
             }
             return true;
-        }
-
-
-        /// <summary>Reads the project header and partitions the body into candidate records, indexed PNG images, and unknown regions.</summary>
-        /// <param name="originFile">The stream containing the project bytes.</param>
-        /// <returns>The body records in file order.</returns>
-        /// <remarks>Record recognition and resynchronization are heuristic; unknown regions are scanner gaps, not necessarily native format blocks.</remarks>
-        /// <exception cref="InvalidDataException">The header line or root header is invalid or incomplete.</exception>
-        [MemberNotNull(nameof(FormatVersion))]
-        [MemberNotNull(nameof(ObjectCount))]
-        [MemberNotNull(nameof(BodyOffset))]
-        [MemberNotNull(nameof(RootHeader))]
-        private IReadOnlyList<IRecord> ParseIntoRecords(Stream originFile)
-        {
-            ReadOnlySpan<byte> prvwOPJUmarker = [0x50, 0x72, 0x76, 0x77, 0x4f, 0x50, 0x4a, 0x55]; // the text prvwOPJU is followed 
-
-            // Read records data into memory.
-            var data = new byte[originFile.Length];
-            originFile.ReadExactly(data, 0, data.Length);
-            _fileData = data;
-
-            // Find the first newline that limits the header and parse the header line.
-            int newline = Array.IndexOf(data, (byte)'\n');
-            if (newline < 0 || newline > 4096)
-                throw new InvalidDataException("The OPJU header line is missing or too long.");
-            var parts = Encoding.ASCII.GetString(data, 0, newline).Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
-            if (parts.Length < 3 || parts[0] != "CPYUA" ||
-                !int.TryParse(parts[2], NumberStyles.None, CultureInfo.InvariantCulture, out var objectCount))
-                throw new InvalidDataException("Invalid OPJU header line.");
-            FormatVersion = parts[1];
-            ObjectCount = objectCount;
-
-            // The body starts immediately after the newline.
-            BodyOffset = newline + 1;
-            if (data.Length - BodyOffset < 7)
-                throw new InvalidDataException("The OPJU root header is truncated.");
-            RootHeader = new ReadOnlyMemory<byte>(data, (int)BodyOffset, 7);
-            var start = BodyOffset + 7;
-            var position = start;
-
-            // Scan for candidate records with a tag in 0x80..0x9f, a length byte, and a payload.
-            while (position < data.Length)
-            {
-                // Find the first record starting after the current position. Records can be
-                // inserted ahead of the scanner when an image index is encountered.
-                int low = 0;
-                int high = _records.Count;
-                while (low < high)
-                {
-                    int middle = low + (high - low) / 2;
-                    if (_records[middle].Offset <= position)
-                        low = middle + 1;
-                    else
-                        high = middle;
-                }
-
-                // Skip a record containing this position; otherwise stop scanning at the
-                // next record so that TLVs and unknown regions cannot overlap it.
-                if (low > 0 && position < _records[low - 1].NextOffset)
-                {
-                    position = _records[low - 1].NextOffset;
-                    continue;
-                }
-                var scanEnd = low < _records.Count ? _records[low].Offset : data.Length;
-                if (TryReadTLVRecord(data, position, MaxTLVLength, out var record) && record.NextOffset <= scanEnd) // to be proven: is 0x60 really the maximum length of a plain record? The engineering spec says 0x7f, but that would be a problem for resynchronization. Longer records are handled as window descriptions.
-                {
-                    // test if the new record is the preview image table record
-                    if (record.Payload.Length == 0x0A &&
-                      prvwOPJUmarker.SequenceEqual(record.Payload.Span.Slice(0, prvwOPJUmarker.Length)))
-                    {
-                        // the length of the record is 0x0A, but it is 6 bytes more, so make a new TLVRecord with the correct length
-                        AddRecord(new TLVRecord(record.Offset, record.Tag, new ReadOnlyMemory<byte>(data, record.Offset + 2, 0x10)));
-
-                        // get the index into the preview image table. A project without any preview image (e.g. a project
-                        // that only holds note windows) stores a null pointer here, and there is neither an image table
-                        // nor any PNG data in the file.
-                        var previewImageTableOffset = (int)BinaryPrimitives.ReadInt64LittleEndian(data.AsSpan().Slice(position + 2 + prvwOPJUmarker.Length, 8));
-                        if (previewImageTableOffset != 0)
-                            FindIndexedPngs(data, previewImageTableOffset, BodyOffset);
-                        position = 6 + record.NextOffset; // length was off by 2 bytes, so we need to add 6 instead of 8
-                        if (TryReadLengthPrefixedBlock(data, position, 0x60, out var rec))
-                        {
-                            AddRecord(rec);
-                            position = rec.NextOffset;
-                        }
-                    }
-                    else if (record.Tag == 0x8f &&
-                        TryFindEmbeddedWorksheetDatasetStart(data, position, record.NextOffset, out int embeddedDatasetOffset))
-                    {
-                        // A candidate data record can swallow the following worksheet width; split only on a validated dataset header.
-                        AddRecord(new UnknownRegionRecord(position, embeddedDatasetOffset - position,
-                            new ReadOnlyMemory<byte>(data, position, embeddedDatasetOffset - position)));
-                        position = embeddedDatasetOffset;
-                    }
-                    else
-                    {
-                        AddRecord(record);
-                        position += 2 + record.Payload.Length;
-                    }
-                    continue;
-                }
-
-                // A window description declares a length above the limit of the plain candidate scan, so it has to
-                // be recognized separately.
-                if (TryReadWindowRecord(data, position, scanEnd, out var windowRecord))
-                {
-                    AddRecord(windowRecord);
-                    position = windowRecord.NextOffset;
-                    continue;
-                }
-
-                // Preserve unrecognized bytes until four consecutive candidates permit resynchronization,
-                // the start of a window description, or the next indexed image boundary is reached.
-                int gapStart = position++;
-                bool windowStartsHere = false;
-                while (position < scanEnd)
-                {
-                    if (HasFourConsecutiveTLVRecords(data, position, scanEnd))
-                        break;
-                    if (TryReadWindowRecord(data, position, scanEnd, out windowRecord))
-                    {
-                        windowStartsHere = true;
-                        break;
-                    }
-                    ++position;
-                }
-                AddRecord(new UnknownRegionRecord(gapStart, position - gapStart, new ReadOnlyMemory<byte>(data, gapStart, position - gapStart)));
-                if (windowStartsHere)
-                {
-                    AddRecord(windowRecord);
-                    position = windowRecord.NextOffset;
-                }
-            }
-            return _records.AsReadOnly();
-        }
-
-        /// <summary>
-        /// Searches a candidate record for the start of a worksheet dataset that the scanner swallowed.
-        /// </summary>
-        /// <param name="data">The complete project bytes.</param>
-        /// <param name="candidateOffset">The offset of the candidate record that may contain the dataset start.</param>
-        /// <param name="candidateEnd">The exclusive end of that candidate record.</param>
-        /// <param name="datasetOffset">The offset of the width record of the dataset, or -1 when none was found.</param>
-        /// <returns><see langword="true"/> if a validated dataset header starts inside the candidate record.</returns>
-        /// <remarks>Splitting a record is only allowed on a complete dataset header, so that the remaining bytes stay an unknown region.</remarks>
-        private static bool TryFindEmbeddedWorksheetDatasetStart(byte[] data, int candidateOffset, int candidateEnd, out int datasetOffset)
-        {
-            datasetOffset = -1;
-            for (int offset = candidateOffset + 2; offset <= candidateEnd - 3; ++offset)
-            {
-                if (!TryReadTLVRecord(data, offset, MaxTLVLength, out var width) || width.Tag != 0x85 ||
-                    width.Payload.Length != 1 || width.Payload.Span[0] is not (1 or 2 or 4 or 8 or 10 or 16 or 50) ||
-                    width.NextOffset != candidateEnd || !HasWorksheetDatasetHeader(data, width.NextOffset))
-                    continue;
-
-                datasetOffset = offset;
-                return true;
-            }
-            return false;
-        }
-
-        /// <summary>
-        /// Checks whether the bytes at the given offset form the beginning of a worksheet dataset.
-        /// </summary>
-        /// <param name="data">The complete project bytes.</param>
-        /// <param name="offset">The offset to check, which is expected to hold the width record of a dataset.</param>
-        /// <returns><see langword="true"/> if width, name marker, dataset name, descriptor and envelope all match.</returns>
-        /// <remarks>
-        /// This is the scanner side of the dataset recognition performed by <see cref="FindWorksheetDatasetCandidates"/>.
-        /// It reads the records directly from the file bytes, because the scanner has not produced records for this area yet.
-        /// </remarks>
-        private static bool HasWorksheetDatasetHeader(byte[] data, int offset)
-        {
-            if (!TryReadTLVRecord(data, offset, 0x60, out var nameMarker) || nameMarker.Tag != 0x91 ||
-                nameMarker.Payload.Length != 1 || nameMarker.Payload.Span[0] is < 1 or > 9 ||
-                !TryReadTLVRecord(data, nameMarker.NextOffset, 0x60, out var nameRecord) || nameRecord.Tag != 0x82 ||
-                nameRecord.Payload.IsEmpty)
-                return false;
-
-            string datasetName;
-            try
-            {
-                datasetName = new UTF8Encoding(false, true).GetString(nameRecord.Payload.Span);
-            }
-            catch (DecoderFallbackException)
-            {
-                return false;
-            }
-            if (!TryParseWorksheetDatasetName(datasetName, out _, out _, out _))
-                return false;
-
-            if (!TryReadTLVRecord(data, nameRecord.NextOffset, 0x60, out var descriptor) ||
-                !IsWorksheetDatasetDescriptor(descriptor) ||
-                !TryReadTLVRecord(data, descriptor.NextOffset, 0x60, out var envelope) ||
-                envelope.Tag is not (0x9b or 0x9d) || envelope.Payload.Length != 24 ||
-                !envelope.Payload.Span[..8].SequenceEqual(new byte[] { 0x18, 0, 0, 0, 0, 0, 0, 0 }) ||
-                envelope.NextOffset > data.Length - 2 || data[envelope.NextOffset] != 0x0a ||
-                data[envelope.NextOffset + 1] is not (0x04 or 0x05))
-                return false;
-
-            return true;
-        }
-
-        /// <summary>
-        /// Tells whether a record is the short descriptor that sits between a dataset name and the
-        /// envelope of its value block.
-        /// </summary>
-        /// <remarks>
-        /// A tag only names a value class in this format, not a field role, and the tag used for this
-        /// descriptor varies: 0x87, 0x8d, 0x8e, 0x8f, 0x90 and 0x93 were observed, sometimes even for
-        /// the columns of one and the same workbook. The four byte form therefore is recognized by its
-        /// shape (two little-endian 16 bit values whose high bytes are 0x10 and 0x03 or 0x04) instead
-        /// of by its tag. The two byte form is restricted to the tag and prefixes seen so far.
-        /// </remarks>
-        /// <param name="descriptor">The candidate descriptor record.</param>
-        /// <returns><see langword="true"/> if the record has the shape of a worksheet dataset descriptor.</returns>
-        private static bool IsWorksheetDatasetDescriptor(TLVRecord descriptor)
-        {
-            var payload = descriptor.Payload.Span;
-            return (descriptor.Tag == 0x8f &&
-                    (payload.StartsWith(new byte[] { 0xc8, 0x10 }) ||
-                     payload.StartsWith(new byte[] { 0xca, 0x10 }) ||
-                     payload.StartsWith(new byte[] { 0xe8, 0x10 }))) ||
-                   (descriptor.Tag == 0x8d && payload.StartsWith(new byte[] { 0xca, 0x10 })) ||
-                   (descriptor.Tag is 0x8e or 0x90 && payload.Length == 4 &&
-                    (payload.StartsWith(new byte[] { 0xc8, 0x10 }) ||
-                     payload.StartsWith(new byte[] { 0xca, 0x10 }))) ||
-                   (descriptor.Tag is 0x87 or 0x93 && payload.Length == 4 &&
-                    (payload[0] is 0xc8 or 0xca or 0xe8) && payload[1] == 0x10 &&
-                    payload[3] is 0x03 or 0x04);
-        }
-
-        /// <summary>Inserts a record in ascending offset order.</summary>
-        /// <param name="record">The record to insert.</param>
-        /// <exception cref="ArgumentException">A record with the same offset already exists.</exception>
-        void AddRecord(IRecord record)
-        {
-            // Appending is the usual case while scanning forward.
-            if (_records.Count == 0 || _records[^1].Offset < record.Offset)
-            {
-                _records.Add(record);
-                return;
-            }
-
-            int low = 0;
-            int high = _records.Count - 1;
-            while (low <= high)
-            {
-                int middle = low + (high - low) / 2;
-                int offset = _records[middle].Offset;
-                if (offset == record.Offset)
-                    throw new ArgumentException($"A record at offset {record.Offset} already exists.", nameof(record));
-                if (offset < record.Offset)
-                    low = middle + 1;
-                else
-                    high = middle - 1;
-            }
-            _records.Insert(low, record);
-        }
-
-
-        /// <summary>
-        /// Reads a block introduced by a little-endian 32 bit length and delimited by 0x0a bytes.
-        /// </summary>
-        /// <param name="data">The complete project bytes.</param>
-        /// <param name="offset">The offset of the length prefix.</param>
-        /// <param name="maximumLength">The maximum accepted block length; not evaluated by this check.</param>
-        /// <param name="record">The block that was read.</param>
-        /// <returns><see langword="true"/> if the length prefix and the delimiters are valid.</returns>
-        /// <remarks>Such a block is not interpreted as objects; it is kept as an <see cref="UnknownRegionRecord"/>.</remarks>
-        bool TryReadLengthPrefixedBlock(byte[] data, int offset, int maximumLength, [NotNullWhen(true)] out IRecord record)
-        {
-            var (isPrefix, length) = IsBlockLengthPrefix(data, offset, maximumLength);
-            if (!isPrefix)
-            {
-                record = null;
-                return false;
-            }
-
-            if (length == 0)
-                record = new UnknownRegionRecord(offset, 5, new ReadOnlyMemory<byte>(data, offset, 5));
-            else
-                record = new UnknownRegionRecord(offset, 4 + length + 2, new ReadOnlyMemory<byte>(data, offset, 4 + length + 2));
-            return true;
-        }
-
-        /// <summary>
-        /// Checks whether the four bytes at the given offset are the length prefix of a block delimited by 0x0a bytes.
-        /// </summary>
-        /// <param name="data">The complete project bytes.</param>
-        /// <param name="offset">The offset of the candidate length prefix.</param>
-        /// <param name="maximumLength">The maximum accepted block length; not evaluated by this check.</param>
-        /// <returns>A pair telling whether the prefix is valid and, if so, which block length it announces.</returns>
-        (bool isPrefix, int length) IsBlockLengthPrefix(byte[] data, int offset, int maximumLength)
-        {
-            if (offset >= data.Length - 5)
-                return (false, 0);
-            if (data[offset + 4] != 0x0a)
-                return (false, 0);
-            int length = BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan(offset, 4));
-
-            if (length > 0)
-            {
-
-                if (offset + 4 + length + 1 >= data.Length || data[offset + 4 + length + 1] != 0x0a)
-                    return (false, 0);
-            }
-            return (true, length);
-        }
-
-
-        /// <summary>Locates the embedded preview images using the observed image index and adds them as records.</summary>
-        /// <param name="data">The complete project bytes.</param>
-        /// <param name="imageTableOffset">The offset where the image table starts.</param>
-        /// <param name="bodyStart">The offset of the start of the body, which bounds the image offsets.</param>
-        /// <remarks>
-        /// The index layout is inferred from observed files. Every entry has to frame a complete PNG image and the entries
-        /// must not overlap. The scanner treats the located images as boundaries that TLV scanning cannot cross.
-        /// </remarks>
-        /// <exception cref="InvalidDataException">The index is truncated, an entry does not frame a PNG image, or entries overlap.</exception>
-        private void FindIndexedPngs(byte[] data, int imageTableOffset, int bodyStart)
-        {
-            var images = new List<(int Offset, int Length)>();
-            var bytes = data.AsSpan();
-
-            // The index has a count, reserved bytes, and a byte length followed by
-            // count pairs of 64-bit little-endian absolute offsets and lengths.
-            ulong count = BinaryPrimitives.ReadUInt64LittleEndian(bytes.Slice(imageTableOffset, 8));
-            uint reserved = BinaryPrimitives.ReadUInt32LittleEndian(bytes.Slice(imageTableOffset + 8, 4));
-            uint tableLength = BinaryPrimitives.ReadUInt32LittleEndian(bytes.Slice(imageTableOffset + 12, 4));
-            if (reserved != 0 || count == 0 || count > (ulong)(data.Length - imageTableOffset - 16) / 16 ||
-                count * 16 != tableLength)
-                throw new InvalidDataException("The OPJU image table is invalid or truncated.");
-
-            // add the image table as a new record
-            AddRecord(new ImageTable(imageTableOffset, (int)(16 + tableLength), new ReadOnlyMemory<byte>(data, imageTableOffset, (int)(16 + tableLength))));
-
-
-            // Reject the entire index if any range is invalid or does not frame a PNG.
-            ReadOnlySpan<byte> signature = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
-            ReadOnlySpan<byte> pngEnd = [0, 0, 0, 0, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82];
-            for (int i = 0; i < (int)count; ++i)
-            {
-                int entry = imageTableOffset + 16 + 16 * i;
-                ulong offset = BinaryPrimitives.ReadUInt64LittleEndian(bytes.Slice(entry, 8));
-                ulong length = BinaryPrimitives.ReadUInt64LittleEndian(bytes.Slice(entry + 8, 8));
-                if (offset < (ulong)bodyStart || offset > (ulong)data.Length || length < 20 ||
-                    length > (ulong)data.Length - offset ||
-                    (offset < (ulong)(imageTableOffset + 16 + tableLength) && offset + length > (ulong)imageTableOffset) ||
-                    !bytes.Slice((int)offset, signature.Length).SequenceEqual(signature) ||
-                    !bytes.Slice((int)(offset + length) - pngEnd.Length, pngEnd.Length).SequenceEqual(pngEnd))
-                {
-                    throw new InvalidDataException($"The OPJU image table entry {i} is invalid or does not frame a PNG image.");
-                }
-                else
-                {
-                    images.Add(((int)offset, (int)length));
-                }
-            }
-
-            // Index entries need not be in file order; overlapping ranges are ambiguous.
-            images.Sort((x, y) => x.Offset.CompareTo(y.Offset));
-            for (int i = 1; i < images.Count; ++i)
-                if (images[i - 1].Offset + images[i - 1].Length > images[i].Offset)
-                    throw new InvalidDataException("The OPJU image table contains overlapping entries.");
-
-            // now add the images also as new records
-            foreach (var image in images)
-            {
-                AddRecord(new PngRecord(image.Offset, new ReadOnlyMemory<byte>(data, image.Offset, image.Length)));
-            }
         }
 
         /// <summary>
@@ -2915,6 +2553,7 @@ namespace Altaxo.Serialization.Origin
             {
                 TLVRecord tlv => tlv.Payload.Span,
                 UnknownRegionRecord region => region.Payload.Span,
+                ValueBlockRecord block => block.Payload.Span,
                 _ => ReadOnlySpan<byte>.Empty
             };
             string? candidateName = null;
@@ -2975,6 +2614,7 @@ namespace Altaxo.Serialization.Origin
             {
                 TLVRecord tlv => tlv.Payload.Span,
                 UnknownRegionRecord region => region.Payload.Span,
+                ValueBlockRecord block => block.Payload.Span,
                 _ => ReadOnlySpan<byte>.Empty
             };
             // Search only the possible length-prefixed suffix of this record, not the surrounding file bytes.
@@ -2994,94 +2634,6 @@ namespace Altaxo.Serialization.Origin
                 }
             }
             return false;
-        }
-
-        /// <summary>
-        /// Try to interpret the data at the given offset as a TLV record. Returns false if the data does not look like a valid record.
-        /// </summary>
-        /// <param name="data">The data to interpret.</param>
-        /// <param name="offset">The offset at which to start interpreting.</param>
-        /// <param name="maximumLength">The maximum length of the record.</param>
-        /// <param name="record">The interpreted record, if successful.</param>
-        /// <returns>True if the data was successfully interpreted as a TLV record, false otherwise.</returns>
-        private static bool TryReadTLVRecord(byte[] data, int offset, int maximumLength, [NotNullWhen(true)] out TLVRecord? record)
-        {
-            record = null;
-            if (offset >= data.Length - 1 || data[offset] < 0x80 || data[offset] > 0x9f)
-                return false;
-            int length = data[offset + 1];
-            if (length > maximumLength || length > data.Length - offset - 2)
-                return false;
-            record = new TLVRecord(offset, data[offset], new ReadOnlyMemory<byte>(data, (int)(offset + 2), length));
-            return true;
-        }
-
-        /// <summary>
-        /// Tries to read a window description record at the given offset.
-        /// </summary>
-        /// <param name="data">The complete project bytes.</param>
-        /// <param name="offset">The offset of the tag to interpret.</param>
-        /// <param name="endOffset">The exclusive end of the area available for scanning.</param>
-        /// <param name="record">The window description, if the observed framing matches.</param>
-        /// <returns><see langword="true"/> if a window description was recognized.</returns>
-        /// <remarks>
-        /// Only lengths that the plain candidate scan rejects (above its limit) can be window descriptions, so this
-        /// recognition cannot change any record that is already parsed today. The payload must consist of a name
-        /// field <c>&lt;length&gt; 00 00 &lt;name&gt;</c>, a run of at least four child records, and a short trailing block.
-        /// </remarks>
-        private static bool TryReadWindowRecord(byte[] data, int offset, int endOffset, [NotNullWhen(true)] out WindowRecord? record)
-        {
-            record = null;
-            if (offset >= data.Length - 1 || data[offset] < 0x80 || data[offset] > 0x9f)
-                return false;
-            int length = data[offset + 1];
-            if (length <= MaxTLVLength || length > 0x7f || offset + 2 + length > Math.Min(endOffset, data.Length))
-                return false;
-
-            // The name field is <field length> 00 00 <name>, where the field length counts its own two zero bytes.
-            var payload = new ReadOnlyMemory<byte>(data, offset + 2, length);
-            var span = payload.Span;
-            int nameLength = span[0] - 2;
-            if (span[0] < 3 || span[1] != 0 || span[2] != 0 || nameLength > length - 3)
-                return false;
-            var nameBytes = span.Slice(3, nameLength);
-            foreach (var b in nameBytes)
-                if (b < 0x20 || b >= 0x7f)
-                    return false;
-
-            // The child records follow the name field. Their run ends at the first byte that is not a candidate tag,
-            // which is the beginning of the trailing block.
-            int payloadEnd = offset + 2 + length;
-            var children = new List<TLVRecord>();
-            int position = 3 + nameLength;
-            while (TryReadTLVRecord(data, offset + 2 + position, MaxTLVLength, out var child) && child.NextOffset <= payloadEnd)
-            {
-                children.Add(child);
-                position = child.NextOffset - (offset + 2);
-            }
-            if (children.Count < 4 || length - position is < 1 or > 32)
-                return false;
-
-            record = new WindowRecord(offset, data[offset], payload, Encoding.ASCII.GetString(nameBytes), children.AsReadOnly());
-            return true;
-        }
-
-        /// <summary>
-        /// Checks if there is a run of at least four consecutive TLV records starting at the given offset. This is used to resynchronize after an unknown region.
-        /// </summary>
-        /// <param name="data">The data to check.</param>
-        /// <param name="offset">The offset at which to start checking.</param>
-        /// <param name="endOffset">The exclusive end of the area available for scanning.</param>
-        /// <returns>True if there is a valid run of TLV records, false otherwise.</returns>
-        private static bool HasFourConsecutiveTLVRecords(byte[] data, int offset, int endOffset)
-        {
-            for (int i = 0; i < 4; ++i)
-            {
-                if (!TryReadTLVRecord(data, offset, MaxTLVLength, out var record) || record.NextOffset > endOffset)
-                    return false;
-                offset = record.NextOffset;
-            }
-            return true;
         }
     }
 }
